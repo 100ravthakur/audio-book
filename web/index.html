@@ -498,9 +498,52 @@ $('player').addEventListener('play', () => {
   if (actx && actx.state === 'suspended') actx.resume();
 });
 
-/* ---------------- voices ---------------- */
+/* ---------------- talking to the backend ----------------
+   Served statically (Vercel) with no backend set, /api/* hits the static host
+   and comes back as its 404 page. Say that plainly instead of letting
+   JSON.parse throw "Unexpected token 'T'".                                  */
+let backendOk = false;
+
+async function jfetch(path, opts = {}) {
+  let res;
+  try {
+    res = await fetch(api(path), opts);
+  } catch {
+    throw new Error(CFG.api
+      ? `Cannot reach ${CFG.api}. On Render's free plan the service sleeps after 15 minutes idle and takes about a minute to wake — try again shortly.`
+      : 'No backend is connected. Click "⚙ backend" and paste your Render URL.');
+  }
+  const ctype = res.headers.get('content-type') || '';
+  if (!ctype.includes('application/json')) {
+    throw new Error(CFG.api
+      ? `${CFG.api} replied ${res.status} and not JSON. Check that URL is your Render service and that it finished deploying.`
+      : 'This page is only the front end — there is no backend here. Click "⚙ backend" below and paste your Render URL (it ends in .onrender.com).');
+  }
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status}).`);
+  return data;
+}
+
+/* ---------------- startup probe ---------------- */
 (async () => {
-  const r = await fetch(api('/api/voices'), { headers: hdr() }).then(r => r.json());
+  try {
+    await jfetch('/api/health', { headers: hdr() });
+  } catch (e) {
+    $('cfgWhere').textContent = ' · not connected';
+    $('cfgWhere').style.color = '#ff8296';
+    $('cfgBox').classList.remove('hide');
+    say('<b>I need a backend before I can read anything.</b>', esc(e.message));
+    return;
+  }
+  backendOk = true;
+  $('cfgWhere').textContent = CFG.api ? ` · connected to ${CFG.api}` : ' · connected to this server';
+  $('cfgWhere').style.color = 'var(--ok)';
+  await loadVoices();
+})();
+
+/* ---------------- voices ---------------- */
+async function loadVoices() {
+  const r = await jfetch('/api/voices', { headers: hdr() });
   const sel = $('voice');
   const g1 = document.createElement('optgroup'); g1.label = 'Shortcuts';
   for (const [k, v] of Object.entries(r.presets)) {
@@ -517,7 +560,7 @@ $('player').addEventListener('play', () => {
   }
   sel.appendChild(g2);
   sel.value = 'neerja';
-})();
+}
 
 /* ---------------- analyze ---------------- */
 async function analyze(body) {
@@ -527,10 +570,7 @@ async function analyze(body) {
   document.body.classList.add('is-working');
   say('<b>Reading it now…</b>', 'Pulling out the text and finding the chapters.');
   try {
-    const res = await fetch(api('/api/analyze'), { method:'POST', body, headers: hdr() });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Could not read that source.');
-    doc = data;
+    doc = await jfetch('/api/analyze', { method:'POST', body, headers: hdr() });
     renderDoc();
   } catch (e) {
     $('err1').textContent = e.message;
@@ -631,7 +671,7 @@ $('render').onclick = async () => {
   $('render').innerHTML = '<span class="spin">◌</span> Generating…';
   document.body.classList.add('is-working');
   try {
-    const res = await fetch(api('/api/render'), {
+    const data = await jfetch('/api/render', {
       method:'POST',
       headers: hdr({ 'Content-Type':'application/json' }),
       body: JSON.stringify({
@@ -640,8 +680,6 @@ $('render').onclick = async () => {
         backend: $('backend').value, target: +$('target').value,
       }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Could not start.');
     jobId = data.job_id;
     tracks = []; cur = -1;
     $('playCard').classList.remove('hide');
@@ -662,7 +700,15 @@ function resetBtn() {
 }
 
 async function poll() {
-  const j = await fetch(api('/api/job/' + jobId), { headers: hdr() }).then(r => r.json());
+  let j;
+  try {
+    j = await jfetch('/api/job/' + jobId, { headers: hdr() });
+  } catch (e) {
+    $('err2').textContent = e.message;
+    $('err2').classList.remove('hide');
+    resetBtn();
+    return;
+  }
   $('prog').style.width = (100 * j.done / Math.max(j.total, 1)) + '%';
   $('jobMeta').innerHTML = `<b>${esc(j.title)}</b> &middot; ${j.done} of ${j.total} ready` +
     (j.state === 'running' ? ' <span class="spin">◌</span>' : '');
