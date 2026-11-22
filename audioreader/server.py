@@ -182,7 +182,11 @@ async def api_render(payload: dict, x_app_token: str | None = Header(None)) -> d
 
     doc = DOCS.get(payload.get("doc_id", ""))
     if not doc:
-        raise HTTPException(404, "That document is no longer loaded. Analyze again.")
+        raise HTTPException(
+            404,
+            "That document is no longer loaded — the server restarted, or it "
+            "has been idle a while. Press Analyze again.",
+        )
 
     wanted = payload.get("sections") or list(range(1, len(doc.sections) + 1))
     picked = [(n, doc.sections[n - 1]) for n in wanted if 1 <= n <= len(doc.sections)]
@@ -245,7 +249,13 @@ async def _run_job(job, doc, picked, out_dir, mode, backend, voice, rate, target
 async def api_job(job_id: str) -> dict:
     job = JOBS.get(job_id)
     if not job:
-        raise HTTPException(404, "Unknown job.")
+        # Jobs live in memory, so a restart (a deploy, or a free-plan instance
+        # waking from sleep) loses them. Say so rather than "unknown".
+        raise HTTPException(
+            404,
+            "That job is gone — the server restarted while it was running. "
+            "Nothing is lost on your side: press Generate again.",
+        )
     return {
         "state": job.state,
         "done": job.done,
