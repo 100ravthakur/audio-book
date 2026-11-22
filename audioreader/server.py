@@ -221,18 +221,28 @@ async def api_render(payload: dict, x_app_token: str | None = Header(None)) -> d
     rate = payload.get("rate") or "+0%"
     target = int(payload.get("target") or 320)
 
+    # The caller may bring their own API key for this request. It is held only
+    # for the length of the job, never written to disk and never logged.
+    creds = {
+        "key": (payload.get("api_key") or "").strip(),
+        "base_url": (payload.get("base_url") or "").strip(),
+        "model": (payload.get("model") or "").strip(),
+    }
+    creds = {k: v for k, v in creds.items() if v} or None
+
     job = Job(id=uuid.uuid4().hex[:12], title=doc.title, total=len(picked))
     JOBS[job.id] = job
     out_dir = WORK / job.id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     asyncio.create_task(
-        _run_job(job, doc, picked, out_dir, mode, backend, voice, rate, target)
+        _run_job(job, doc, picked, out_dir, mode, backend, voice, rate, target, creds)
     )
     return {"job_id": job.id, "total": job.total}
 
 
-async def _run_job(job, doc, picked, out_dir, mode, backend, voice, rate, target):
+async def _run_job(job, doc, picked, out_dir, mode, backend, voice, rate, target,
+                   creds=None):
     from .explain import explain_section
 
     try:
@@ -240,7 +250,7 @@ async def _run_job(job, doc, picked, out_dir, mode, backend, voice, rate, target
             text = sec.text
             if mode == "explain":
                 text = await asyncio.to_thread(
-                    explain_section, sec, doc.title, target, backend
+                    explain_section, sec, doc.title, target, backend, creds
                 )
             path = out_dir / f"{n:03d}.mp3"
             await speak_async(f"{sec.title}.\n\n{text}", path, voice=voice, rate=rate)

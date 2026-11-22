@@ -70,6 +70,16 @@ def clean(raw: str) -> str:
         # Drop lines that are mostly figure/table noise or dot leaders.
         if re.fullmatch(r"[.\-_\u2022\s]{4,}", s):
             continue
+        # Table markup. Old sites lay a whole article out in one table cell,
+        # so judge by length: long means prose, short means a navigation box.
+        if "|" in s:
+            if re.fullmatch(r"[|\s:\-\u2013\u2014]+", s):
+                continue
+            cells = [c.strip() for c in s.strip("|").split("|") if c.strip()]
+            joined = " ".join(cells)
+            if len(joined.split()) < 8:
+                continue
+            s = joined
         out_lines.append(s)
 
     text = "\n".join(out_lines)
@@ -78,10 +88,109 @@ def clean(raw: str) -> str:
     return text.strip()
 
 
+# Said aloud, an abbreviation is a stumble, and its full stop also splits the
+# sentence in the wrong place. Spell them out.
+_ABBREV = [
+    (r"\be\.\s?g\.", "for example"), (r"\bi\.\s?e\.", "that is"),
+    (r"\betc\.", "and so on"), (r"\bvs\.?\b", "versus"),
+    (r"\bapprox\.", "approximately"), (r"\bcf\.", "compare"),
+    (r"\bFig\.", "Figure"), (r"\bNo\.\s*(?=\d)", "Number "),
+    (r"\bca\.\s*(?=\d)", "around "), (r"\bpp\.\s*(?=\d)", "pages "),
+    (r"\bp\.\s*(?=\d)", "page "),
+]
+
+_CURRENCY = [
+    (r"\$\s?([\d][\d,.]*)", r"\1 dollars"), (r"₹\s?([\d][\d,.]*)", r"\1 rupees"),
+    (r"€\s?([\d][\d,.]*)", r"\1 euros"), (r"£\s?([\d][\d,.]*)", r"\1 pounds"),
+    (r"¥\s?([\d][\d,.]*)", r"\1 yen"),
+]
+
+_SYMBOLS = {
+    "%": " percent ", "&": " and ", "×": " times ", "÷": " divided by ",
+    "±": " plus or minus ", "°": " degrees ", "≈": " roughly ", "≤": " at most ",
+    "≥": " at least ", "≠": " not equal to ", "→": " to ", "=": " equals ",
+    "$": " dollars ", "₹": " rupees ", "€": " euros ", "£": " pounds ",
+}
+
+
+_OPENERS = ("equals", "plus", "times", "divided by", "at most", "at least",
+            "roughly", "percent", "not equal to", "where ,")
+_DANGLING = {"is", "or", "and", "the", "a", "an", "of", "to", "equals", "where",
+             "with", "by", "for", "equivalently", "that", "than", "as", "in"}
+
+
+def _is_debris(sentence: str) -> bool:
+    """True for formula wreckage left behind when symbols are stripped out.
+
+    Maths on a page is usually an image or MathML, so the extractor drops it
+    and leaves things like "An exact formula for the payment () is or
+    equivalently". Reading that aloud is worse than skipping it.
+    """
+    s = sentence.strip()
+    low = s.lower()
+    words = s.split()
+    if len(words) < 4:
+        return True
+
+    # "= monthly interest rate" became "equals monthly interest rate".
+    if low.startswith(_OPENERS):
+        return True
+    # A clause left hanging because the maths after it vanished.
+    if low.rstrip(".,;:").split()[-1] in _DANGLING and not s.endswith((".", "!", "?")):
+        return True
+    # Code and spreadsheet formulas: PMT(rate, nper, pv), snake_case names.
+    if re.search(r"[A-Za-z_]+\s*\([A-Za-z_]+\s*,", s) or re.search(r"\w+_\w+", s):
+        return True
+
+    singles = sum(1 for w in words if len(w.strip(".,;:()")) <= 1)
+    if singles / len(words) > 0.25:
+        return True
+    letters = sum(c.isalpha() or c.isspace() for c in s)
+    return letters / max(len(s), 1) < 0.62
+
+
 def strip_for_speech(text: str) -> str:
-    """Remove things a listener cannot hear usefully."""
-    text = re.sub(r"https?://\S+", "link", text)
-    text = re.sub(r"\[\d+\]", "", text)        # citation markers
-    text = re.sub(r"\(\s*\)", "", text)
+    """Turn extracted text into something worth hearing."""
+    text = re.sub(r"https?://\S+", "a link", text)
+    text = re.sub(r"\[\s*\d+\s*\]", "", text)                      # citations
+    text = re.sub(r"\[\s*(edit|citation needed)\s*\]", "", text, flags=re.I)
+
+    for pat, rep in _ABBREV:
+        text = re.sub(pat, rep, text)
+    for pat, rep in _CURRENCY:
+        text = re.sub(pat, rep, text)
+
+    kept = []
+    for line in text.split("\n"):
+        s = line.strip()
+        if not s:
+            kept.append("")
+            continue
+        if re.fullmatch(r"[\s|:\-–—_=*+·•]{2,}", s):               # rules, leaders
+            continue
+        if re.fullmatch(r"(v\s*t\s*e|edit|references|external links|see also)",
+                        s, flags=re.I):
+            continue
+        kept.append(re.sub(r"^[\-–—•*]\s+", "", s))                # bullet leaders
+    text = "\n".join(kept)
+
+    for sym, word in _SYMBOLS.items():
+        text = text.replace(sym, word)
+
+    text = re.sub(r"\(\s*\)", " ", text)        # parens emptied by stripped maths
+    text = re.sub(r"\(\s+", "(", text)
+    text = re.sub(r"\s+\)", ")", text)
+    text = re.sub(r"\bU\.\s?S\.", "US", text)   # or the full stop splits the sentence
+    text = re.sub(r"\bU\.\s?K\.", "UK", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
-    return text.strip()
+    text = re.sub(r"\s+([.,;:!?])", r"\1", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # Finally drop whole sentences that survived only as wreckage.
+    out = []
+    for para in text.split("\n\n"):
+        good = [s for s in re.split(r"(?<=[.!?])\s+", para.strip())
+                if s and not _is_debris(s)]
+        if good:
+            out.append(" ".join(good))
+    return "\n\n".join(out).strip()

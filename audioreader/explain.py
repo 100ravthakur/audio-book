@@ -54,6 +54,7 @@ def available() -> dict[str, object]:
     """Which engines this instance can actually use, for /api/health."""
     return {
         "local": True,
+        "byok": True,       # the page may supply a key for one request
         "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "openai": bool(os.environ.get("OPENAI_API_KEY")),
         "anthropic_model": ANTHROPIC_MODEL,
@@ -90,8 +91,18 @@ def _post(url: str, payload: dict, headers: dict) -> dict:
         raise RuntimeError("The explanation API did not return JSON.") from None
 
 
-def _anthropic(system: str, user: str) -> str:
-    key = os.environ.get("ANTHROPIC_API_KEY")
+def _check_base(url: str) -> None:
+    """A caller-supplied base URL must not point back into our own network."""
+    from .extract import assert_public_url
+
+    if not url.startswith("https://"):
+        raise RuntimeError("The API base URL must start with https://")
+    assert_public_url(url)
+
+
+def _anthropic(system: str, user: str, creds: dict | None = None) -> str:
+    creds = creds or {}
+    key = creds.get("key") or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise RuntimeError(
             "Explain mode with Claude needs ANTHROPIC_API_KEY. Set it, pick the "
@@ -100,7 +111,7 @@ def _anthropic(system: str, user: str) -> str:
     data = _post(
         ANTHROPIC_URL,
         {
-            "model": ANTHROPIC_MODEL,
+            "model": creds.get("model") or ANTHROPIC_MODEL,
             "max_tokens": 2000,
             "system": system,
             "messages": [{"role": "user", "content": user}],
@@ -114,17 +125,22 @@ def _anthropic(system: str, user: str) -> str:
     return text
 
 
-def _openai(system: str, user: str) -> str:
-    key = os.environ.get("OPENAI_API_KEY")
+def _openai(system: str, user: str, creds: dict | None = None) -> str:
+    creds = creds or {}
+    key = creds.get("key") or os.environ.get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError(
             "Explain mode with an OpenAI-compatible API needs OPENAI_API_KEY "
             "(and OPENAI_BASE_URL if you are not using OpenAI itself)."
         )
+    base = OPENAI_BASE
+    if creds.get("base_url"):
+        base = creds["base_url"].rstrip("/")
+        _check_base(base)
     data = _post(
-        f"{OPENAI_BASE}/chat/completions",
+        f"{base}/chat/completions",
         {
-            "model": OPENAI_MODEL,
+            "model": creds.get("model") or OPENAI_MODEL,
             "max_tokens": 2000,
             "messages": [
                 {"role": "system", "content": system},
@@ -145,7 +161,11 @@ def _openai(system: str, user: str) -> str:
 # -------------------------------------------------------------------- entry
 
 def explain_section(section: Section, doc_title: str, target: int = 320,
-                    backend: str = "local") -> str:
+                    backend: str = "local", creds: dict | None = None) -> str:
+    """`creds` lets the caller pass their own key for this request only.
+
+    Nothing about it is stored or logged; it lives for the length of the call.
+    """
     backend = ALIASES.get(backend, backend)
     if backend == "local":
         return _extractive(section, target)
@@ -157,18 +177,18 @@ def explain_section(section: Section, doc_title: str, target: int = 320,
         f"---\n{section.text[:120_000]}\n---"
     )
     if backend == "anthropic":
-        return _anthropic(system, user)
+        return _anthropic(system, user, creds)
     if backend == "openai":
-        return _openai(system, user)
+        return _openai(system, user, creds)
     raise RuntimeError(f"Unknown explanation engine: {backend}")
 
 
 def explain_document(doc: Document, target: int = 320, backend: str = "local",
-                     on_progress=None) -> Document:
+                     on_progress=None, creds: dict | None = None) -> Document:
     out = Document(title=doc.title, source=doc.source, kind=doc.kind, sections=[])
     for i, sec in enumerate(doc.sections, 1):
         out.sections.append(
-            Section(sec.title, explain_section(sec, doc.title, target, backend))
+            Section(sec.title, explain_section(sec, doc.title, target, backend, creds))
         )
         if on_progress:
             on_progress(i, len(doc.sections))

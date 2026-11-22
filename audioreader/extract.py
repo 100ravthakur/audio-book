@@ -174,7 +174,7 @@ def from_web(url: str) -> Document:
     body = trafilatura.extract(
         downloaded,
         include_comments=False,
-        include_tables=True,
+        include_tables=True,    # old sites lay the whole article out in a table
         favor_precision=True,
     )
     title = None
