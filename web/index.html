@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AudioReader</title>
+<style>
+  :root {
+    --bg:#0a0918; --bg2:#15102f; --panel:rgba(30,23,61,.72); --panel2:rgba(16,12,36,.8);
+    --line:#3d3070; --text:#f3ecff; --dim:#a295cf;
+    --pink:#ff7eb6; --pink2:#ff3f96; --cyan:#5ce1ff; --gold:#ffd86b; --ok:#7bffb0;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    margin:0; color:var(--text); overflow-x:hidden;
+    font:15px/1.6 "Segoe UI",system-ui,-apple-system,sans-serif;
+    background:
+      radial-gradient(1100px 600px at 80% -10%, #3a1f6b 0%, transparent 60%),
+      radial-gradient(900px 500px at 10% 0%, #16305e 0%, transparent 55%),
+      linear-gradient(180deg,#0f0a24 0%, var(--bg) 60%, #07060f 100%);
+    background-attachment:fixed;
+  }
+  /* ---------- stars + petals ---------- */
+  .sky { position:fixed; inset:0; pointer-events:none; z-index:0; overflow:hidden; }
+  .star { position:absolute; width:2px; height:2px; border-radius:50%; background:#fff;
+          opacity:.6; animation:tw 3s ease-in-out infinite; }
+  @keyframes tw { 0%,100%{opacity:.15;transform:scale(.6)} 50%{opacity:.9;transform:scale(1.2)} }
+  .petal { position:absolute; top:-30px; width:14px; height:12px; opacity:.75;
+           background:linear-gradient(135deg,#ffb3d4,#ff6aa8);
+           border-radius:14px 2px 14px 2px; animation:fall linear infinite; }
+  @keyframes fall {
+    0%   { transform:translate(0,-40px) rotate(0deg); opacity:0; }
+    8%   { opacity:.8; }
+    100% { transform:translate(var(--dx),105vh) rotate(680deg); opacity:0; }
+  }
+  /* ---------- layout ---------- */
+  .wrap { position:relative; z-index:1; max-width:1040px; margin:0 auto; padding:26px 20px 90px; }
+  header { display:flex; align-items:center; gap:14px; margin-bottom:22px; }
+  .logo {
+    font-size:30px; font-weight:800; letter-spacing:-.5px; margin:0;
+    background:linear-gradient(90deg,var(--pink),var(--gold),var(--cyan));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    text-shadow:0 0 36px rgba(255,126,182,.25);
+  }
+  .jp { color:var(--dim); font-size:12px; letter-spacing:.42em; margin-top:4px; }
+  .card {
+    background:var(--panel); border:1px solid var(--line); border-radius:18px;
+    padding:20px 22px; margin-bottom:18px; backdrop-filter:blur(10px);
+    box-shadow:0 18px 44px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  .card h2 {
+    font-size:11.5px; text-transform:uppercase; letter-spacing:.16em; font-weight:700;
+    color:var(--pink); margin:0 0 14px; display:flex; align-items:center; gap:8px;
+  }
+  .card h2::before { content:"✦"; color:var(--gold); }
+
+  /* ---------- stage ---------- */
+  .stage {
+    display:grid; grid-template-columns:260px 1fr; gap:20px; align-items:center;
+    background:linear-gradient(135deg,rgba(255,126,182,.14),rgba(92,225,255,.1));
+    border:1px solid rgba(255,126,182,.3);
+  }
+  @media (max-width:720px){ .stage{ grid-template-columns:1fr; text-align:center; } }
+  .chanBox { position:relative; }
+  #chan { width:100%; height:auto; display:block; filter:drop-shadow(0 12px 26px rgba(255,80,150,.3)); }
+  .halo {
+    position:absolute; inset:14% 10% 6%; border-radius:50%; z-index:-1;
+    background:radial-gradient(circle,rgba(255,126,182,.4),transparent 68%);
+    animation:pulse 3.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{transform:scale(.92);opacity:.5} 50%{transform:scale(1.07);opacity:.85} }
+  .float { animation:bob 4.2s ease-in-out infinite; transform-box:fill-box; transform-origin:center bottom; }
+  @keyframes bob { 0%,100%{transform:translateY(0) rotate(-.6deg)} 50%{transform:translateY(-7px) rotate(.6deg)} }
+  .eyes { transform-box:fill-box; transform-origin:center; animation:blink 5.4s infinite; }
+  @keyframes blink { 0%,92%,100%{transform:scaleY(1)} 95%{transform:scaleY(.06)} }
+  body.is-working .eyes { animation:blink 1.6s infinite; }
+  .note { opacity:0; transition:opacity .3s; }
+  body.is-speaking .note { opacity:1; animation:notefly 2.4s ease-in-out infinite; }
+  .note:nth-of-type(2) { animation-delay:.9s !important; }
+  @keyframes notefly {
+    0%   { opacity:0; transform:translate(0,0) rotate(0); }
+    25%  { opacity:1; }
+    100% { opacity:0; transform:translate(16px,-42px) rotate(22deg); }
+  }
+  .bubble {
+    position:relative; background:rgba(12,9,28,.72); border:1px solid rgba(255,126,182,.4);
+    border-radius:16px; padding:14px 18px; font-size:14.5px; min-height:70px;
+  }
+  .bubble::before {
+    content:""; position:absolute; left:-9px; top:30px; width:16px; height:16px;
+    background:rgba(12,9,28,.72); border-left:1px solid rgba(255,126,182,.4);
+    border-bottom:1px solid rgba(255,126,182,.4); transform:rotate(45deg);
+  }
+  @media (max-width:720px){ .bubble::before{ display:none; } }
+  .bubble b { color:var(--gold); }
+  .bubble .small { color:var(--dim); font-size:12.5px; display:block; margin-top:6px; }
+
+  /* ---------- visualizer ---------- */
+  #viz { display:flex; align-items:flex-end; gap:3px; height:46px; margin-top:14px; }
+  #viz span {
+    flex:1; min-height:3px; height:3px; border-radius:3px;
+    background:linear-gradient(180deg,var(--cyan),var(--pink2));
+    transition:height .07s linear; opacity:.85;
+  }
+  /* when nothing is playing the bars breathe instead of flatlining */
+  body:not(.is-speaking) #viz span { animation:idleWave 2.4s ease-in-out infinite; opacity:.45; }
+  @keyframes idleWave { 0%,100%{height:4px} 50%{height:15px} }
+
+  /* ---------- controls ---------- */
+  label { display:block; font-size:12px; color:var(--dim); margin-bottom:6px; letter-spacing:.04em; }
+  input[type=text], select, input[type=number] {
+    width:100%; padding:11px 13px; background:var(--panel2); color:var(--text);
+    border:1px solid var(--line); border-radius:11px; font:inherit; font-size:14px;
+  }
+  input[type=text]:focus, select:focus, input[type=number]:focus {
+    outline:none; border-color:var(--pink); box-shadow:0 0 0 3px rgba(255,126,182,.16);
+  }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > * { flex:1; min-width:150px; }
+  button {
+    padding:11px 20px; border-radius:11px; border:1px solid var(--line);
+    background:var(--panel2); color:var(--text); font:inherit; font-weight:600;
+    cursor:pointer; transition:.18s;
+  }
+  button:hover:not(:disabled) { border-color:var(--pink); transform:translateY(-1px); }
+  button.primary {
+    background:linear-gradient(135deg,var(--pink2),#9b5cff); border:0; color:#fff;
+    box-shadow:0 8px 22px rgba(255,63,150,.38);
+  }
+  button.primary:hover:not(:disabled) { filter:brightness(1.12); }
+  button:disabled { opacity:.42; cursor:not-allowed; transform:none; }
+  .drop {
+    border:1.5px dashed var(--line); border-radius:14px; padding:22px; text-align:center;
+    color:var(--dim); cursor:pointer; transition:.18s; font-size:13.5px;
+  }
+  .drop:hover,.drop.over { border-color:var(--pink); color:var(--text); background:rgba(255,126,182,.07); }
+  .or { text-align:center; color:var(--dim); font-size:12px; margin:12px 0; letter-spacing:.2em; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:11px; overflow:hidden; }
+  .seg button { border:0; border-radius:0; background:transparent; font-weight:500; }
+  .seg button.on { background:linear-gradient(135deg,var(--pink2),#9b5cff); color:#fff; font-weight:700; }
+  .meta { color:var(--dim); font-size:13px; margin-bottom:12px; }
+  .meta b { color:var(--text); }
+  .secs, .tracksBox { max-height:300px; overflow-y:auto; border:1px solid var(--line); border-radius:12px; }
+  .sec,.track {
+    display:flex; align-items:center; gap:10px; padding:9px 13px;
+    border-bottom:1px solid rgba(61,48,112,.5); font-size:13.5px;
+  }
+  .sec:last-child,.track:last-child { border-bottom:0; }
+  .sec:hover,.track:hover { background:rgba(255,126,182,.08); }
+  .track { cursor:pointer; }
+  .track.playing { background:linear-gradient(90deg,rgba(255,63,150,.26),transparent); }
+  .track.playing .t::before { content:"♪ "; color:var(--gold); }
+  .sec .t,.track .t { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sec .w,.track .n { color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
+  .track a { color:var(--dim); text-decoration:none; font-size:12px; }
+  .track a:hover { color:var(--cyan); }
+  input[type=checkbox] { accent-color:var(--pink2); width:15px; height:15px; }
+  .bar { height:8px; background:var(--panel2); border-radius:6px; overflow:hidden; margin:12px 0 4px; }
+  .bar div {
+    height:100%; width:0; transition:width .35s;
+    background:linear-gradient(90deg,var(--cyan),var(--pink2),var(--gold)); background-size:200% 100%;
+    animation:slide 2.2s linear infinite;
+  }
+  @keyframes slide { to { background-position:200% 0; } }
+  audio { width:100%; margin-top:14px; border-radius:11px; }
+  .err { color:#ff8296; font-size:13.5px; margin-top:10px; }
+  .hint { color:var(--dim); font-size:12px; margin-top:8px; }
+  .hide { display:none !important; }
+  .spin { display:inline-block; animation:sp 1s linear infinite; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="sky" id="sky"></div>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1 class="logo">AudioReader</h1>
+      <div class="jp">ヨミアゲ</div>
+    </div>
+  </header>
+
+  <!-- stage -->
+  <div class="card stage">
+    <div class="chanBox">
+      <div class="halo"></div>
+      <svg id="chan" viewBox="0 0 260 290" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="gHair" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#6c45a8"/><stop offset="1" stop-color="#2a1a4d"/>
+          </linearGradient>
+          <linearGradient id="gBang" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#8a5bc9"/><stop offset="1" stop-color="#3d2568"/>
+          </linearGradient>
+          <linearGradient id="gSkin" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#ffe8da"/><stop offset="1" stop-color="#ffd2bd"/>
+          </linearGradient>
+          <linearGradient id="gCloth" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#2b2a5e"/><stop offset="1" stop-color="#171636"/>
+          </linearGradient>
+          <radialGradient id="gIris" cx=".4" cy=".35">
+            <stop offset="0" stop-color="#b6f6ff"/><stop offset=".55" stop-color="#31b9ec"/>
+            <stop offset="1" stop-color="#174b86"/>
+          </radialGradient>
+        </defs>
+
+        <g class="float">
+          <!-- back hair -->
+          <path d="M130 30 C 72 30 56 78 56 126 C 56 176 50 214 38 248 C 70 260 100 264 130 264
+                   C 160 264 190 260 222 248 C 210 214 204 176 204 126 C 204 78 188 30 130 30 Z"
+                fill="url(#gHair)"/>
+          <!-- ahoge -->
+          <path d="M127 34 C 118 18 142 10 141 26" fill="none" stroke="#8a5bc9"
+                stroke-width="5" stroke-linecap="round"/>
+          <!-- shoulders + neck -->
+          <path d="M118 176 h24 v44 h-24 z" fill="#f0bda6"/>
+          <path d="M58 290 C 66 246 96 228 130 228 C 164 228 194 246 202 290 Z" fill="url(#gCloth)"/>
+          <path d="M130 228 L 117 248 L 130 262 L 143 248 Z" fill="#ff7eb6" opacity=".9"/>
+          <!-- face -->
+          <path d="M130 68 C 168 68 184 96 184 128 C 184 162 160 196 130 196
+                   C 100 196 76 162 76 128 C 76 96 92 68 130 68 Z" fill="url(#gSkin)"/>
+          <!-- ears -->
+          <ellipse cx="78" cy="138" rx="7" ry="11" fill="#f7c7b2"/>
+          <ellipse cx="182" cy="138" rx="7" ry="11" fill="#f7c7b2"/>
+          <!-- blush -->
+          <ellipse cx="97" cy="160" rx="13" ry="7" fill="#ff93b6" opacity=".55"/>
+          <ellipse cx="163" cy="160" rx="13" ry="7" fill="#ff93b6" opacity=".55"/>
+          <!-- brows -->
+          <path d="M94 118 C 101 111 116 110 123 115" stroke="#6b45a3" stroke-width="3.6"
+                fill="none" stroke-linecap="round"/>
+          <path d="M137 115 C 144 110 159 111 166 118" stroke="#6b45a3" stroke-width="3.6"
+                fill="none" stroke-linecap="round"/>
+          <!-- eyes -->
+          <g class="eyes">
+            <ellipse cx="108" cy="142" rx="15" ry="17" fill="#fffafd"/>
+            <ellipse cx="152" cy="142" rx="15" ry="17" fill="#fffafd"/>
+            <g class="iris">
+              <circle cx="108" cy="143" r="10.5" fill="url(#gIris)"/>
+              <circle cx="108" cy="143" r="4.4" fill="#10203f"/>
+              <circle cx="104.2" cy="138.4" r="3.6" fill="#fff"/>
+              <circle cx="111.8" cy="147" r="1.8" fill="#fff" opacity=".85"/>
+              <circle cx="152" cy="143" r="10.5" fill="url(#gIris)"/>
+              <circle cx="152" cy="143" r="4.4" fill="#10203f"/>
+              <circle cx="148.2" cy="138.4" r="3.6" fill="#fff"/>
+              <circle cx="155.8" cy="147" r="1.8" fill="#fff" opacity=".85"/>
+            </g>
+            <path d="M92 131 C 99 122 117 122 124 131" stroke="#2b1b45" stroke-width="4.2"
+                  fill="none" stroke-linecap="round"/>
+            <path d="M136 131 C 143 122 161 122 168 131" stroke="#2b1b45" stroke-width="4.2"
+                  fill="none" stroke-linecap="round"/>
+          </g>
+          <!-- nose + mouth -->
+          <path d="M129 158 q 4 3 0 5" stroke="#e39c86" stroke-width="2.4"
+                fill="none" stroke-linecap="round"/>
+          <ellipse id="mouth" cx="130" cy="176" rx="8" ry="2.6" fill="#8c2a50"/>
+          <ellipse id="tongue" cx="130" cy="178" rx="5" ry="1" fill="#ff7392" opacity=".9"/>
+          <!-- fringe: swept, sits above the brows -->
+          <path d="M78 112 C 80 64 102 40 130 40 C 158 40 180 64 182 112
+                   C 174 90 160 78 146 88
+                   C 138 70 114 70 104 86
+                   C 94 82 84 94 78 112 Z" fill="url(#gBang)"/>
+          <!-- side locks -->
+          <path d="M56 130 C 56 86 70 52 96 38 C 78 70 74 102 78 134 C 74 158 70 180 72 206
+                   C 62 182 56 156 56 130 Z" fill="url(#gBang)"/>
+          <path d="M204 130 C 204 86 190 52 164 38 C 182 70 186 102 182 134
+                   C 186 158 190 180 188 206 C 198 182 204 156 204 130 Z" fill="url(#gBang)"/>
+          <!-- headphones -->
+          <path d="M62 132 C 54 64 92 28 130 28 C 168 28 206 64 198 132"
+                fill="none" stroke="#ff5fa4" stroke-width="11" stroke-linecap="round"/>
+          <rect x="46" y="118" width="28" height="44" rx="14" fill="#ff5fa4"/>
+          <rect x="186" y="118" width="28" height="44" rx="14" fill="#ff5fa4"/>
+          <rect x="53" y="126" width="14" height="28" rx="7" fill="#ffd0e4" opacity=".85"/>
+          <rect x="193" y="126" width="14" height="28" rx="7" fill="#ffd0e4" opacity=".85"/>
+          <!-- music notes -->
+          <text class="note" x="212" y="100" font-size="26" fill="#ffd86b">♪</text>
+          <text class="note" x="22" y="114" font-size="22" fill="#5ce1ff">♫</text>
+        </g>
+      </svg>
+    </div>
+    <div>
+      <div class="bubble" id="bubble">
+        <b>Yomi here!</b> Give me a webpage, a PDF or a book and I'll read it to you.
+        <span class="small">Pick <i>Explain it</i> and I'll teach it instead of reading it.</span>
+      </div>
+      <div id="viz"></div>
+    </div>
+  </div>
+
+  <!-- 1. source -->
+  <div class="card">
+    <h2>Step 1 &middot; Source</h2>
+    <label for="url">Webpage URL</label>
+    <div class="row">
+      <input id="url" type="text" placeholder="https://example.com/article" style="flex:3" />
+      <button id="go" class="primary" style="flex:0 0 auto">Analyze</button>
+    </div>
+    <div class="or">— or —</div>
+    <div class="drop" id="drop">
+      Drop a <b>PDF</b>, <b>EPUB</b> or <b>.txt</b> here, or click to choose
+      <input type="file" id="file" class="hide" accept=".pdf,.epub,.txt,.md" />
+    </div>
+    <div class="err hide" id="err1"></div>
+  </div>
+
+  <!-- 2. document -->
+  <div class="card hide" id="docCard">
+    <h2>Step 2 &middot; What to narrate</h2>
+    <div class="meta" id="docMeta"></div>
+    <div class="row" style="margin-bottom:10px">
+      <button id="selAll" style="flex:0 0 auto">Select all</button>
+      <button id="selNone" style="flex:0 0 auto">Select none</button>
+      <span style="flex:1"></span>
+    </div>
+    <div class="secs" id="secs"></div>
+  </div>
+
+  <!-- 3. voice -->
+  <div class="card hide" id="voiceCard">
+    <h2>Step 3 &middot; Voice &amp; mode</h2>
+    <div class="row">
+      <div><label for="voice">Voice</label><select id="voice"></select></div>
+      <div style="flex:0 0 140px">
+        <label for="rate">Speed</label>
+        <select id="rate">
+          <option value="-20%">0.8× slower</option>
+          <option value="-10%">0.9×</option>
+          <option value="+0%" selected>1.0× normal</option>
+          <option value="+15%">1.15×</option>
+          <option value="+30%">1.3× faster</option>
+          <option value="+50%">1.5×</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:16px">
+      <label>Mode</label>
+      <div class="seg">
+        <button id="mRead" class="on">Read verbatim</button>
+        <button id="mExplain">Explain it</button>
+      </div>
+      <div class="hint" id="modeHint">Speaks the text word for word.</div>
+    </div>
+    <div class="row hide" id="explainOpts" style="margin-top:14px">
+      <div>
+        <label for="backend">Explanation engine</label>
+        <select id="backend">
+          <option value="local">Offline outline (no key, instant)</option>
+          <option value="claude">Claude (needs ANTHROPIC_API_KEY)</option>
+        </select>
+      </div>
+      <div style="flex:0 0 160px">
+        <label for="target">Words per section</label>
+        <input id="target" type="number" value="320" min="80" max="1200" step="20" />
+      </div>
+    </div>
+    <div style="margin-top:18px">
+      <button id="render" class="primary">Generate audio ♪</button>
+      <span class="hint" id="estimate"></span>
+    </div>
+    <div class="err hide" id="err2"></div>
+  </div>
+
+  <!-- 4. player -->
+  <div class="card hide" id="playCard">
+    <h2>Step 4 &middot; Listen</h2>
+    <div class="meta" id="jobMeta"></div>
+    <div class="bar"><div id="prog"></div></div>
+    <div class="tracksBox" id="tracks" style="margin-top:12px"></div>
+    <audio id="player" controls preload="none"></audio>
+    <div class="hint">Autoplays into the next section. Right-click a track to save the MP3.</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let doc = null, mode = 'read', jobId = null, tracks = [], cur = -1;
+
+/* ---------------- ambience ---------------- */
+(function sky() {
+  const el = $('sky'), n = [];
+  for (let i = 0; i < 60; i++) {
+    n.push(`<div class="star" style="left:${Math.random()*100}%;top:${Math.random()*85}%;
+            animation-delay:${(Math.random()*3).toFixed(2)}s"></div>`);
+  }
+  for (let i = 0; i < 16; i++) {
+    n.push(`<div class="petal" style="left:${Math.random()*100}%;
+            --dx:${(Math.random()*160-80).toFixed(0)}px;
+            animation-duration:${(9+Math.random()*10).toFixed(1)}s;
+            animation-delay:${(Math.random()*12).toFixed(1)}s;
+            transform:scale(${(.6+Math.random()*.7).toFixed(2)})"></div>`);
+  }
+  el.innerHTML = n.join('');
+})();
+
+/* eyes follow the cursor — small, so she never looks cross-eyed */
+document.addEventListener('mousemove', e => {
+  const box = $('chan').getBoundingClientRect();
+  const dx = (e.clientX - (box.left + box.width / 2)) / box.width;
+  const dy = (e.clientY - (box.top + box.height / 2)) / box.height;
+  const x = Math.max(-1, Math.min(1, dx)) * 3.2;
+  const y = Math.max(-1, Math.min(1, dy)) * 2.6;
+  document.querySelector('.iris').setAttribute('transform', `translate(${x.toFixed(2)},${y.toFixed(2)})`);
+});
+
+function say(html, small) {
+  $('bubble').innerHTML = html + (small ? `<span class="small">${small}</span>` : '');
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+/* ---------------- live mouth + visualizer ---------------- */
+const BARS = 34;
+$('viz').innerHTML = Array.from({ length: BARS },
+  (_, i) => `<span style="animation-delay:${(i * 0.06).toFixed(2)}s"></span>`).join('');
+const bars = [...$('viz').children];
+let actx, analyser, freq, started = false;
+
+function initAudio() {
+  if (started) return;
+  started = true;
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = actx.createMediaElementSource($('player'));
+  analyser = actx.createAnalyser();
+  analyser.fftSize = 128;
+  analyser.smoothingTimeConstant = 0.72;
+  src.connect(analyser);
+  analyser.connect(actx.destination);
+  freq = new Uint8Array(analyser.frequencyBinCount);  // the render loop is already running
+}
+
+function tick() {
+  requestAnimationFrame(tick);
+  const playing = analyser && !$('player').paused && !$('player').ended;
+  document.body.classList.toggle('is-speaking', !!playing);
+
+  if (!playing) {
+    $('mouth').setAttribute('ry', 2.6);
+    $('tongue').setAttribute('ry', 1);
+    bars.forEach(b => b.style.height = '3px');
+    return;
+  }
+  analyser.getByteFrequencyData(freq);
+
+  // voice energy sits in the low-mid bins; that drives how wide the mouth opens
+  let sum = 0;
+  for (let i = 2; i < 20; i++) sum += freq[i];
+  const level = Math.min(1, (sum / 18) / 150);
+  $('mouth').setAttribute('ry', (2.4 + level * 11).toFixed(2));
+  $('tongue').setAttribute('ry', (0.8 + level * 3.4).toFixed(2));
+
+  const step = Math.floor(freq.length / BARS) || 1;
+  bars.forEach((b, i) => {
+    const v = freq[i * step] / 255;
+    b.style.height = Math.max(3, v * 46).toFixed(0) + 'px';
+  });
+}
+
+$('player').addEventListener('play', () => {
+  initAudio();
+  if (actx && actx.state === 'suspended') actx.resume();
+});
+
+/* ---------------- voices ---------------- */
+(async () => {
+  const r = await fetch('/api/voices').then(r => r.json());
+  const sel = $('voice');
+  const g1 = document.createElement('optgroup'); g1.label = 'Shortcuts';
+  for (const [k, v] of Object.entries(r.presets)) {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = `${k} — ${v}`;
+    g1.appendChild(o);
+  }
+  sel.appendChild(g1);
+  const g2 = document.createElement('optgroup'); g2.label = 'All voices';
+  for (const v of r.voices) {
+    const o = document.createElement('option');
+    o.value = v.name; o.textContent = `${v.name} (${v.gender})`;
+    g2.appendChild(o);
+  }
+  sel.appendChild(g2);
+  sel.value = 'neerja';
+})();
+
+/* ---------------- analyze ---------------- */
+async function analyze(body) {
+  $('err1').classList.add('hide');
+  $('go').disabled = true;
+  $('go').innerHTML = '<span class="spin">◌</span>';
+  document.body.classList.add('is-working');
+  say('<b>Reading it now…</b>', 'Pulling out the text and finding the chapters.');
+  try {
+    const res = await fetch('/api/analyze', { method: 'POST', body });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Could not read that source.');
+    doc = data;
+    renderDoc();
+  } catch (e) {
+    $('err1').textContent = e.message;
+    $('err1').classList.remove('hide');
+    say('<b>I couldn\'t read that one.</b>', esc(e.message));
+  } finally {
+    $('go').disabled = false;
+    $('go').textContent = 'Analyze';
+    document.body.classList.remove('is-working');
+  }
+}
+
+$('go').onclick = () => {
+  const u = $('url').value.trim();
+  if (!u) {
+    $('err1').textContent = 'Paste a URL first, or drop a file below.';
+    $('err1').classList.remove('hide');
+    return;
+  }
+  const fd = new FormData(); fd.append('url', u);
+  analyze(fd);
+};
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') $('go').click(); });
+
+$('drop').onclick = () => $('file').click();
+$('file').onchange = e => {
+  if (!e.target.files[0]) return;
+  const fd = new FormData(); fd.append('file', e.target.files[0]);
+  analyze(fd);
+};
+['dragover','dragenter'].forEach(ev =>
+  $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+['dragleave','drop'].forEach(ev =>
+  $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+$('drop').addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  analyze(fd);
+});
+
+/* ---------------- document ---------------- */
+function renderDoc() {
+  $('docCard').classList.remove('hide');
+  $('voiceCard').classList.remove('hide');
+  $('docMeta').innerHTML =
+    `<b>${esc(doc.title)}</b> &middot; ${doc.kind.toUpperCase()} &middot; ` +
+    `${doc.sections.length} sections &middot; ${doc.words.toLocaleString()} words &middot; ` +
+    `~${doc.minutes} min read aloud`;
+  $('secs').innerHTML = doc.sections.map(s => `
+    <div class="sec">
+      <input type="checkbox" class="cb" value="${s.n}" checked />
+      <span class="w">${s.n}</span>
+      <span class="t">${esc(s.title)}</span>
+      <span class="w">${s.words.toLocaleString()}w · ~${Math.round(s.minutes)}m</span>
+    </div>`).join('');
+  $('secs').querySelectorAll('.cb').forEach(cb => cb.onchange = estimate);
+  estimate();
+  say(`<b>${esc(doc.title)}</b>`,
+      `${doc.sections.length} sections · ${doc.words.toLocaleString()} words · about ${doc.minutes} minutes if I read all of it.`);
+  $('docCard').scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+const picked = () => [...$('secs').querySelectorAll('.cb:checked')].map(c => +c.value);
+
+$('selAll').onclick = () => { $('secs').querySelectorAll('.cb').forEach(c => c.checked = true); estimate(); };
+$('selNone').onclick = () => { $('secs').querySelectorAll('.cb').forEach(c => c.checked = false); estimate(); };
+
+function estimate() {
+  if (!doc) { $('render').disabled = true; return; }
+  const ns = picked();
+  const w = doc.sections.filter(s => ns.includes(s.n)).reduce((a, s) => a + s.words, 0);
+  const mins = mode === 'explain' ? ns.length * (+$('target').value || 320) / 165 : w / 165;
+  $('estimate').textContent = ns.length
+    ? `${ns.length} section(s) → ~${Math.round(mins)} min of audio`
+    : 'Nothing selected.';
+  $('render').disabled = !ns.length;
+}
+
+/* ---------------- mode ---------------- */
+$('mRead').onclick = () => setMode('read');
+$('mExplain').onclick = () => setMode('explain');
+function setMode(m) {
+  mode = m;
+  $('mRead').classList.toggle('on', m === 'read');
+  $('mExplain').classList.toggle('on', m === 'explain');
+  $('explainOpts').classList.toggle('hide', m !== 'explain');
+  $('modeHint').textContent = m === 'read'
+    ? 'Speaks the text word for word.'
+    : 'Summarizes and teaches each section, then narrates the explanation.';
+  estimate();
+}
+$('target').oninput = estimate;
+
+/* ---------------- render ---------------- */
+$('render').onclick = async () => {
+  $('err2').classList.add('hide');
+  $('render').disabled = true;
+  $('render').innerHTML = '<span class="spin">◌</span> Generating…';
+  document.body.classList.add('is-working');
+  try {
+    const res = await fetch('/api/render', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({
+        doc_id: doc.doc_id, sections: picked(), mode,
+        voice: $('voice').value, rate: $('rate').value,
+        backend: $('backend').value, target: +$('target').value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Could not start.');
+    jobId = data.job_id;
+    tracks = []; cur = -1;
+    $('playCard').classList.remove('hide');
+    $('tracks').innerHTML = '';
+    say('<b>Warming up my voice…</b>', 'The first section starts playing the moment it is ready.');
+    $('playCard').scrollIntoView({ behavior:'smooth', block:'nearest' });
+    poll();
+  } catch (e) {
+    $('err2').textContent = e.message;
+    $('err2').classList.remove('hide');
+    resetBtn();
+  }
+};
+function resetBtn() {
+  $('render').disabled = false;
+  $('render').innerHTML = 'Generate audio ♪';
+  document.body.classList.remove('is-working');
+}
+
+async function poll() {
+  const j = await fetch('/api/job/' + jobId).then(r => r.json());
+  $('prog').style.width = (100 * j.done / Math.max(j.total, 1)) + '%';
+  $('jobMeta').innerHTML = `<b>${esc(j.title)}</b> &middot; ${j.done} of ${j.total} ready` +
+    (j.state === 'running' ? ' <span class="spin">◌</span>' : '');
+  if (j.tracks.length > tracks.length) {
+    tracks = j.tracks;
+    drawTracks();
+    if (cur === -1) play(0);
+  }
+  if (j.state === 'running') return setTimeout(poll, 1200);
+  resetBtn();
+  if (j.state === 'error') {
+    $('err2').textContent = j.message;
+    $('err2').classList.remove('hide');
+    say('<b>Something went wrong partway.</b>', esc(j.message));
+  }
+}
+
+function drawTracks() {
+  $('tracks').innerHTML = tracks.map((t, i) => `
+    <div class="track${i === cur ? ' playing' : ''}" data-i="${i}">
+      <span class="n">${t.n}</span>
+      <span class="t">${esc(t.title)}</span>
+      <span class="n">${t.size_mb}M</span>
+      <a href="${t.url}" download>mp3</a>
+      <a href="${t.text_url}" target="_blank">text</a>
+    </div>`).join('');
+  $('tracks').querySelectorAll('.track').forEach(el => {
+    el.onclick = ev => { if (ev.target.tagName !== 'A') play(+el.dataset.i); };
+  });
+}
+
+function play(i) {
+  if (i < 0 || i >= tracks.length) return;
+  cur = i;
+  $('player').src = tracks[i].url;
+  $('player').play().catch(() => {});
+  say(`<b>Now reading</b> ${esc(tracks[i].title)}`,
+      `Section ${i + 1} of ${tracks.length}`);
+  drawTracks();
+}
+$('player').onended = () => {
+  if (cur + 1 < tracks.length) play(cur + 1);
+  else say('<b>That\'s the end.</b>', 'Hope that was useful — drop me something else whenever.');
+};
+
+setMode('read');
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

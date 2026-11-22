@@ -1,0 +1,10 @@
+edge-tts>=6.1
+pymupdf>=1.24
+trafilatura>=1.8
+EbookLib>=0.18
+beautifulsoup4>=4.12
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+# optional, only for: explain --backend claude
+anthropic>=0.40
