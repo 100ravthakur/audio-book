@@ -1,8 +1,10 @@
 """Turn a PDF, webpage, EPUB or text file into a Document."""
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
+import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -87,8 +89,41 @@ def _chunk_pages(pages: list[str], per_chunk: int = 12) -> list[Section]:
 
 # --------------------------------------------------------------------- WEBPAGE
 
+def assert_public_url(url: str) -> None:
+    """Refuse anything that is not a public http(s) host.
+
+    When AudioReader is hosted, the URL box is an open door into whatever
+    network the server sits in — cloud metadata endpoints, internal admin
+    pages, localhost services. Resolve the name first and reject every
+    address that is not publicly routable.
+    """
+    parts = urlparse(url)
+    if parts.scheme not in ("http", "https"):
+        raise ValueError("Only http:// and https:// addresses are supported.")
+    host = parts.hostname
+    if not host:
+        raise ValueError("That URL has no host in it.")
+
+    try:
+        infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme == "https" else 80))
+    except socket.gaierror as exc:
+        raise ValueError(f"Could not resolve {host}.") from exc
+
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise ValueError(
+                f"{host} resolves to a private address ({ip}). "
+                "Only public web pages can be read."
+            )
+
+
 def from_web(url: str) -> Document:
     import trafilatura
+
+    if os.environ.get("ALLOW_PRIVATE_URLS", "").lower() not in ("1", "true", "yes"):
+        assert_public_url(url)
 
     downloaded = trafilatura.fetch_url(url)
     if not downloaded:

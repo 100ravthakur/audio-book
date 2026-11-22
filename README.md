@@ -110,6 +110,70 @@ narrates that. Two engines:
 - Only read things you're entitled to read. This is a reading tool for your
   own material.
 
+## Deploying: Render + Vercel
+
+**Vercel alone cannot run this.** Its functions stop at 10s (60s on Pro), the
+filesystem is read-only, and nothing survives between requests. One chapter
+takes about a minute to narrate and the MP3 has to stay on disk until you've
+listened to it. So the work is split:
+
+| Where | What |
+|---|---|
+| **Render** | the Python backend — extraction, narration, the job queue |
+| **Vercel** | the `web/` folder as a static site, calling that backend |
+
+### 1 · Backend on Render
+
+1. Render → **New** → **Blueprint** → pick this repo. It reads `render.yaml`.
+2. Wait for the build, then open `https://<your-service>.onrender.com/api/health`.
+   You should get `{"ok": true, ...}`.
+
+The blueprint sets free-plan-sized limits: 25 MB uploads, 8 sections per job,
+audio deleted after 45 minutes, work directory in `/tmp`.
+
+### 2 · Frontend on Vercel
+
+1. Vercel → **Add New** → **Project** → same repo. `vercel.json` already
+   points the output at `web/`, so take the defaults.
+2. Open the deployed page, click **⚙ backend** under the URL box, paste your
+   Render URL, **Save**. It is remembered in that browser.
+
+To bake the URL in for everyone instead, edit `web/config.js`:
+
+```js
+window.AUDIOREADER_API = "https://your-service.onrender.com";
+```
+
+### 3 · Lock it down
+
+Once you know the Vercel domain, set this on Render → Environment, so other
+sites cannot use your backend:
+
+```
+ALLOWED_ORIGINS = https://your-project.vercel.app
+```
+
+To make it private entirely, set `APP_TOKEN` to any random string on Render and
+enter the same string under **⚙ backend** on the page.
+
+### What to expect from the free tiers
+
+- **Render free sleeps after 15 minutes idle.** The next request takes
+  ~50 seconds to wake it. The page will look stuck; it isn't.
+- **512 MB RAM.** A big PDF can run it out of memory. That's why uploads are
+  capped at 25 MB and jobs at 8 sections.
+- **Ephemeral disk.** A restart or redeploy throws away generated audio and
+  in-progress jobs. Download what you want to keep.
+- **The speech service may refuse datacenter IPs.** Edge TTS is free and
+  unauthenticated, and it sometimes rate-limits or blocks cloud ranges. If
+  hosted narration starts failing with 403s, that's why — the local install
+  keeps working.
+- **Anyone with the link can use it** unless you set `APP_TOKEN`. It fetches
+  URLs on your server's behalf, so private addresses (localhost, `10.x`,
+  `192.168.x`, and cloud metadata at `169.254.169.254`) are refused.
+
+For a whole book, run it locally. The hosted copy is for articles and chapters.
+
 ## Custom voices
 
 The speech layer is one function — `speak_async` in `audioreader/tts.py`.

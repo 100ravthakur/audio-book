@@ -1,18 +1,28 @@
-"""Local web UI. Run with: audioreader serve  (or python -m audioreader serve)
+"""Web API + local UI.
 
-Everything stays on this machine: uploads go to a work directory, audio is
-written next to it, nothing is sent anywhere except the speech service.
+Run locally:   audioreader serve
+Run hosted:    uvicorn audioreader.server:app --host 0.0.0.0 --port $PORT
+
+Configuration (all optional, read from the environment):
+  ALLOWED_ORIGINS   comma-separated origins allowed to call the API ("*" default)
+  APP_TOKEN         if set, every /api call must send  X-App-Token: <value>
+  MAX_UPLOAD_MB     largest file accepted            (default 120)
+  MAX_SECTIONS      most sections per render job     (default 0 = no limit)
+  JOB_TTL_MIN       delete a finished job's audio after N minutes (default 60)
 """
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from . import __version__
 from .extract import load
@@ -21,12 +31,28 @@ from .tts import DEFAULT_VOICE, PRESETS, list_voices, resolve_voice, speak_async
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
-WORK = ROOT / "out" / "_web"
-WORK.mkdir(parents=True, exist_ok=True)
+# Hosted filesystems are usually read-only outside the temp dir.
+WORK = Path(os.environ.get("WORK_DIR") or (ROOT / "out" / "_web"))
+try:
+    WORK.mkdir(parents=True, exist_ok=True)
+except OSError:
+    WORK = Path("/tmp/audioreader")
+    WORK.mkdir(parents=True, exist_ok=True)
 
-MAX_UPLOAD = 120 * 1024 * 1024  # 120 MB
+MAX_UPLOAD = int(os.environ.get("MAX_UPLOAD_MB", "120")) * 1024 * 1024
+MAX_SECTIONS = int(os.environ.get("MAX_SECTIONS", "0"))
+JOB_TTL = int(os.environ.get("JOB_TTL_MIN", "60")) * 60
+APP_TOKEN = os.environ.get("APP_TOKEN", "")
+ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
 app = FastAPI(title="AudioReader", version=__version__)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ORIGINS,
+    allow_credentials=False,   # no cookies: a wildcard origin is safe here
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 DOCS: dict[str, Document] = {}
 JOBS: dict[str, "Job"] = {}
@@ -40,7 +66,25 @@ class Job:
     done: int = 0
     state: str = "running"  # running | done | error
     message: str = ""
+    created: float = field(default_factory=time.time)
     tracks: list[dict] = field(default_factory=list)
+
+
+def check_token(token: str | None) -> None:
+    if APP_TOKEN and token != APP_TOKEN:
+        raise HTTPException(401, "Missing or wrong X-App-Token.")
+
+
+def sweep() -> None:
+    """Drop expired jobs and their audio so a long-lived instance stays small."""
+    now = time.time()
+    for jid, job in list(JOBS.items()):
+        if job.state != "running" and now - job.created > JOB_TTL:
+            shutil.rmtree(WORK / jid, ignore_errors=True)
+            JOBS.pop(jid, None)
+    for doc_id in list(DOCS):
+        if len(DOCS) > 40:
+            DOCS.pop(doc_id, None)
 
 
 # ---------------------------------------------------------------------- routes
@@ -48,6 +92,25 @@ class Job:
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
     return (WEB / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/config.js")
+async def config_js() -> Response:
+    path = WEB / "config.js"
+    body = path.read_text(encoding="utf-8") if path.exists() else ""
+    return Response(body, media_type="application/javascript")
+
+
+@app.get("/api/health")
+async def health() -> dict:
+    return {
+        "ok": True,
+        "version": __version__,
+        "auth": bool(APP_TOKEN),
+        "max_upload_mb": MAX_UPLOAD // 1024 // 1024,
+        "max_sections": MAX_SECTIONS or None,
+        "jobs": len(JOBS),
+    }
 
 
 @app.get("/api/voices")
@@ -60,8 +123,12 @@ async def api_voices(q: str = "") -> dict:
 async def api_analyze(
     url: str = Form(""),
     file: UploadFile | None = File(None),
+    x_app_token: str | None = Header(None),
 ) -> JSONResponse:
     """Read the source and return its structure. No audio yet."""
+    check_token(x_app_token)
+    sweep()
+
     source: str
     if file and file.filename:
         suffix = Path(file.filename).suffix.lower()
@@ -75,7 +142,9 @@ async def api_analyze(
                 if size > MAX_UPLOAD:
                     out.close()
                     dest.unlink(missing_ok=True)
-                    raise HTTPException(413, "File larger than 120 MB.")
+                    raise HTTPException(
+                        413, f"File larger than {MAX_UPLOAD // 1024 // 1024} MB."
+                    )
                 out.write(chunk)
         source = str(dest)
     elif url.strip():
@@ -107,17 +176,24 @@ async def api_analyze(
 
 
 @app.post("/api/render")
-async def api_render(payload: dict) -> dict:
-    doc_id = payload.get("doc_id", "")
-    doc = DOCS.get(doc_id)
+async def api_render(payload: dict, x_app_token: str | None = Header(None)) -> dict:
+    check_token(x_app_token)
+    sweep()
+
+    doc = DOCS.get(payload.get("doc_id", ""))
     if not doc:
         raise HTTPException(404, "That document is no longer loaded. Analyze again.")
 
     wanted = payload.get("sections") or list(range(1, len(doc.sections) + 1))
-    picked = [(n, doc.sections[n - 1]) for n in wanted
-              if 1 <= n <= len(doc.sections)]
+    picked = [(n, doc.sections[n - 1]) for n in wanted if 1 <= n <= len(doc.sections)]
     if not picked:
         raise HTTPException(400, "No sections selected.")
+    if MAX_SECTIONS and len(picked) > MAX_SECTIONS:
+        raise HTTPException(
+            400,
+            f"This instance renders at most {MAX_SECTIONS} sections at a time. "
+            f"Pick fewer, or run AudioReader locally for the whole book.",
+        )
 
     mode = payload.get("mode", "read")
     backend = payload.get("backend", "local")
@@ -200,7 +276,8 @@ async def api_text(job_id: str, name: str) -> FileResponse:
 
 
 @app.post("/api/cleanup")
-async def api_cleanup() -> dict:
+async def api_cleanup(x_app_token: str | None = Header(None)) -> dict:
+    check_token(x_app_token)
     shutil.rmtree(WORK, ignore_errors=True)
     WORK.mkdir(parents=True, exist_ok=True)
     DOCS.clear()

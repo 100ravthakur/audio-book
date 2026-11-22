@@ -1,0 +1,7 @@
+audioreader/
+out/
+*.py
+requirements.txt
+pyproject.toml
+render.yaml
+.claude/

@@ -1,0 +1,34 @@
+# Render blueprint — the Python backend (extraction + narration).
+# Render > New > Blueprint > pick this repo, and it reads this file.
+services:
+  - type: web
+    name: audioreader
+    runtime: python
+    plan: free
+    region: singapore          # closest Render region to India
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn audioreader.server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      # Lock this to your Vercel domain once you know it, e.g.
+      #   https://audio-book.vercel.app
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      # The free plan has 512 MB of RAM and an ephemeral disk, so keep jobs small.
+      - key: MAX_UPLOAD_MB
+        value: "25"
+      - key: MAX_SECTIONS
+        value: "8"
+      - key: JOB_TTL_MIN
+        value: "45"
+      - key: WORK_DIR
+        value: /tmp/audioreader
+      # Set a value here (Render dashboard > Environment) to make the API
+      # private — the page then needs the same token under "⚙ backend".
+      - key: APP_TOKEN
+        sync: false
+      # Only needed for explain --backend claude.
+      - key: ANTHROPIC_API_KEY
+        sync: false

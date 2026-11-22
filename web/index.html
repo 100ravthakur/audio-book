@@ -302,6 +302,23 @@
       <input type="file" id="file" class="hide" accept=".pdf,.epub,.txt,.md" />
     </div>
     <div class="err hide" id="err1"></div>
+    <div class="hint">
+      <a href="#" id="cfgToggle" style="color:var(--cyan);text-decoration:none">⚙ backend</a>
+      <span id="cfgWhere"></span>
+    </div>
+    <div class="row hide" id="cfgBox" style="margin-top:10px">
+      <div style="flex:3">
+        <label for="cfgApi">Backend URL (blank = this same server)</label>
+        <input id="cfgApi" type="text" placeholder="https://audioreader-xxxx.onrender.com" />
+      </div>
+      <div style="flex:1">
+        <label for="cfgToken">APP_TOKEN (only if set)</label>
+        <input id="cfgToken" type="text" placeholder="optional" />
+      </div>
+      <div style="flex:0 0 auto; display:flex; align-items:flex-end">
+        <button id="cfgSave">Save</button>
+      </div>
+    </div>
   </div>
 
   <!-- 2. document -->
@@ -372,9 +389,30 @@
   </div>
 </div>
 
+<script src="config.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let doc = null, mode = 'read', jobId = null, tracks = [], cur = -1;
+
+/* ---------------- backend location ----------------
+   Served by the backend  -> empty, same origin.
+   Static on Vercel       -> config.js, or whatever the user saved here.      */
+const CFG = {
+  api: (localStorage.getItem('ar_api') ?? (window.AUDIOREADER_API || '')).replace(/\/+$/, ''),
+  token: localStorage.getItem('ar_token') ?? (window.AUDIOREADER_TOKEN || ''),
+};
+const api = p => CFG.api + p;
+const hdr = (extra = {}) => CFG.token ? { ...extra, 'X-App-Token': CFG.token } : extra;
+
+$('cfgApi').value = CFG.api;
+$('cfgToken').value = CFG.token;
+$('cfgWhere').textContent = CFG.api ? ` · using ${CFG.api}` : ' · using this server';
+$('cfgToggle').onclick = e => { e.preventDefault(); $('cfgBox').classList.toggle('hide'); };
+$('cfgSave').onclick = () => {
+  localStorage.setItem('ar_api', $('cfgApi').value.trim().replace(/\/+$/, ''));
+  localStorage.setItem('ar_token', $('cfgToken').value.trim());
+  location.reload();
+};
 
 /* ---------------- ambience ---------------- */
 (function sky() {
@@ -462,7 +500,7 @@ $('player').addEventListener('play', () => {
 
 /* ---------------- voices ---------------- */
 (async () => {
-  const r = await fetch('/api/voices').then(r => r.json());
+  const r = await fetch(api('/api/voices'), { headers: hdr() }).then(r => r.json());
   const sel = $('voice');
   const g1 = document.createElement('optgroup'); g1.label = 'Shortcuts';
   for (const [k, v] of Object.entries(r.presets)) {
@@ -489,7 +527,7 @@ async function analyze(body) {
   document.body.classList.add('is-working');
   say('<b>Reading it now…</b>', 'Pulling out the text and finding the chapters.');
   try {
-    const res = await fetch('/api/analyze', { method: 'POST', body });
+    const res = await fetch(api('/api/analyze'), { method:'POST', body, headers: hdr() });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Could not read that source.');
     doc = data;
@@ -593,9 +631,9 @@ $('render').onclick = async () => {
   $('render').innerHTML = '<span class="spin">◌</span> Generating…';
   document.body.classList.add('is-working');
   try {
-    const res = await fetch('/api/render', {
+    const res = await fetch(api('/api/render'), {
       method:'POST',
-      headers:{ 'Content-Type':'application/json' },
+      headers: hdr({ 'Content-Type':'application/json' }),
       body: JSON.stringify({
         doc_id: doc.doc_id, sections: picked(), mode,
         voice: $('voice').value, rate: $('rate').value,
@@ -624,7 +662,7 @@ function resetBtn() {
 }
 
 async function poll() {
-  const j = await fetch('/api/job/' + jobId).then(r => r.json());
+  const j = await fetch(api('/api/job/' + jobId), { headers: hdr() }).then(r => r.json());
   $('prog').style.width = (100 * j.done / Math.max(j.total, 1)) + '%';
   $('jobMeta').innerHTML = `<b>${esc(j.title)}</b> &middot; ${j.done} of ${j.total} ready` +
     (j.state === 'running' ? ' <span class="spin">◌</span>' : '');
@@ -648,8 +686,8 @@ function drawTracks() {
       <span class="n">${t.n}</span>
       <span class="t">${esc(t.title)}</span>
       <span class="n">${t.size_mb}M</span>
-      <a href="${t.url}" download>mp3</a>
-      <a href="${t.text_url}" target="_blank">text</a>
+      <a href="${api(t.url)}" download>mp3</a>
+      <a href="${api(t.text_url)}" target="_blank">text</a>
     </div>`).join('');
   $('tracks').querySelectorAll('.track').forEach(el => {
     el.onclick = ev => { if (ev.target.tagName !== 'A') play(+el.dataset.i); };
@@ -659,7 +697,8 @@ function drawTracks() {
 function play(i) {
   if (i < 0 || i >= tracks.length) return;
   cur = i;
-  $('player').src = tracks[i].url;
+  $('player').crossOrigin = CFG.api ? 'anonymous' : null;  // analyser needs CORS audio
+  $('player').src = api(tracks[i].url);
   $('player').play().catch(() => {});
   say(`<b>Now reading</b> ${esc(tracks[i].title)}`,
       `Section ${i + 1} of ${tracks.length}`);
