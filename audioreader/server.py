@@ -103,6 +103,8 @@ async def config_js() -> Response:
 
 @app.get("/api/health")
 async def health() -> dict:
+    from .explain import available
+
     return {
         "ok": True,
         "version": __version__,
@@ -110,6 +112,7 @@ async def health() -> dict:
         "max_upload_mb": MAX_UPLOAD // 1024 // 1024,
         "max_sections": MAX_SECTIONS or None,
         "jobs": len(JOBS),
+        "explain": available(),
     }
 
 
@@ -173,6 +176,19 @@ async def api_analyze(
             ],
         }
     )
+
+
+@app.get("/api/section/{doc_id}/{n}")
+async def api_section(doc_id: str, n: int, x_app_token: str | None = Header(None)) -> dict:
+    """The extracted text of one section, for the reading pane."""
+    check_token(x_app_token)
+    doc = DOCS.get(doc_id)
+    if not doc:
+        raise HTTPException(404, "That document is no longer loaded. Analyze again.")
+    if not 1 <= n <= len(doc.sections):
+        raise HTTPException(404, "No such section.")
+    sec = doc.sections[n - 1]
+    return {"n": n, "title": sec.title, "words": sec.words, "text": sec.text[:200_000]}
 
 
 @app.post("/api/render")

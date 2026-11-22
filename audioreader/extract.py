@@ -119,11 +119,53 @@ def assert_public_url(url: str) -> None:
             )
 
 
+def _pdf_at(url: str) -> bytes | None:
+    """If the URL serves a PDF rather than a page, return its bytes.
+
+    A link straight to a .pdf is common, and the HTML extractor makes
+    nonsense of one, so check before parsing.
+    """
+    import urllib.request
+
+    req = urllib.request.Request(
+        url, headers={"User-Agent": UA, "Range": "bytes=0-1023"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            head = resp.read(1024)
+    except Exception:
+        return None
+
+    if "application/pdf" not in ctype and not head.startswith(b"%PDF-"):
+        return None
+
+    full = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(full, timeout=180) as resp:
+        return resp.read(80 * 1024 * 1024)
+
+
 def from_web(url: str) -> Document:
+    import tempfile
+
     import trafilatura
 
     if os.environ.get("ALLOW_PRIVATE_URLS", "").lower() not in ("1", "true", "yes"):
         assert_public_url(url)
+
+    pdf_bytes = _pdf_at(url)
+    if pdf_bytes:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as fh:
+            fh.write(pdf_bytes)
+            tmp = Path(fh.name)
+        try:
+            doc = from_pdf(tmp)
+        finally:
+            tmp.unlink(missing_ok=True)
+        doc.source = url
+        if doc.title.startswith("tmp"):  # temp filename is not a title
+            doc.title = Path(urlparse(url).path).stem.replace("-", " ").strip() or url
+        return doc
 
     downloaded = trafilatura.fetch_url(url)
     if not downloaded:

@@ -1,9 +1,14 @@
-# AudioReader
+# Your Voice  ·  きみのこえ
 
 Turn a **PDF**, a **webpage**, an **EPUB** or a text file into narrated audio —
 either read word for word, or explained to you chapter by chapter.
 
 Runs entirely on your machine. No API key, no account, no cost.
+
+The web app is themed after the twilight of *Kimi no Na wa* — dusk indigo
+falling to a coral horizon, with the red thread across the masthead. The
+Python package and the command stay `audioreader`, because the deployed
+service starts from that module name.
 
 ---
 
@@ -24,12 +29,11 @@ Open <http://127.0.0.1:8080>. Paste a URL or drop a PDF, pick the sections you
 want, choose a voice, hit **Generate audio**. It plays in the page and
 autoplays into the next section; each track has an `mp3` and a `text` link.
 
-The page is an anime night-sky scene with a narrator character, **Yomi**, who
+The page is a dusk scene with a narrator who
 is wired to the audio rather than merely animated: a Web Audio analyser reads
 the playing MP3 every frame, and the low-mid energy drives how wide her mouth
 opens, so she lip-syncs to the actual narration. She blinks, breathes, follows
-your cursor with her eyes, and tells you what she's doing in the speech bubble.
-The bar meter beside her is the live spectrum. All CSS and inline SVG — no
+and says what she is doing beside the player. The bar meter is the live spectrum. All CSS and inline SVG — no
 images, no libraries, nothing fetched from the internet.
 
 ## Use it — command line
@@ -86,12 +90,41 @@ narrates that. Two engines:
 
 - `--backend local` (default in the web UI): picks the highest-signal
   sentences. Offline, instant, free, and rough.
-- `--backend claude`: real teaching — defines jargon, keeps the author's
-  claims, written for the ear. Needs `ANTHROPIC_API_KEY` in your environment:
+- `--backend anthropic` or `--backend openai`: real teaching — defines
+  jargon, keeps the author's claims, written for the ear.
 
-  ```powershell
-  $env:ANTHROPIC_API_KEY = "sk-ant-..."
-  ```
+### Wiring up an explanation API
+
+Both are called over plain HTTP from the standard library, so there is no
+provider SDK to install and switching provider is one environment variable.
+`/api/health` reports which engines the server can actually use, and the web
+app greys out the ones with no key.
+
+**Anthropic**
+
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+$env:ANTHROPIC_MODEL = "claude-sonnet-5-5"   # optional
+```
+
+**Anything OpenAI-compatible** — set the base URL and model to match:
+
+| Provider | `OPENAI_BASE_URL` | typical `OPENAI_MODEL` |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` (default) | `gpt-4o-mini` |
+| Groq (free tier) | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` |
+| OpenRouter | `https://openrouter.ai/api/v1` | any listed model |
+| Together | `https://api.together.xyz/v1` | any listed model |
+| Ollama (on your machine) | `http://localhost:11434/v1` | `llama3.1` |
+
+```powershell
+$env:OPENAI_API_KEY = "gsk_..."
+$env:OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
+$env:OPENAI_MODEL = "llama-3.3-70b-versatile"
+```
+
+On Render, set the same names under **Environment** instead. Ollama only
+works for a local install — a hosted backend cannot reach your localhost.
 
 ---
 

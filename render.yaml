@@ -29,6 +29,12 @@ services:
       # private — the page then needs the same token under "⚙ backend".
       - key: APP_TOKEN
         sync: false
-      # Only needed for explain --backend claude.
+      # Explain mode. Set whichever you have; /api/health reports what works.
       - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL     # e.g. https://api.groq.com/openai/v1
+        sync: false
+      - key: OPENAI_MODEL        # e.g. llama-3.3-70b-versatile
         sync: false

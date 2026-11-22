@@ -1,17 +1,39 @@
 """Explain mode: rewrite a section as a spoken explanation instead of reading it.
 
-Two backends:
-  claude - uses the Anthropic API (needs ANTHROPIC_API_KEY). Real teaching.
-  local  - no network, no key: extractive outline. Rough but free and instant.
+Engines
+-------
+local      no network, no key. Picks the highest-signal sentences. Rough.
+anthropic  Claude. Needs ANTHROPIC_API_KEY.
+openai     Anything that speaks the OpenAI chat-completions protocol, which
+           is most of them. Needs OPENAI_API_KEY, and OPENAI_BASE_URL if it
+           is not OpenAI itself:
+
+             OpenAI      (default)   https://api.openai.com/v1
+             Groq        (free tier) https://api.groq.com/openai/v1
+             OpenRouter              https://openrouter.ai/api/v1
+             Together                https://api.together.xyz/v1
+             Ollama      (local)     http://localhost:11434/v1
+
+Both are called over plain HTTP from the standard library, so no provider
+SDK is installed and switching provider is an environment variable.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import urllib.error
+import urllib.request
 
 from .model import Document, Section
 
-MODEL = "claude-sonnet-5-5"
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5")
+OPENAI_BASE = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+TIMEOUT = int(os.environ.get("EXPLAIN_TIMEOUT", "120"))
+
+ALIASES = {"claude": "anthropic", "": "local", None: "local"}
 
 SYSTEM = """You are narrating an audiobook-style explanation. You will be given one \
 chapter or section of a document. Explain it to a listener who cannot see the page.
@@ -28,39 +50,129 @@ Rules:
 - Target about {target} words. Output only the narration text."""
 
 
+def available() -> dict[str, object]:
+    """Which engines this instance can actually use, for /api/health."""
+    return {
+        "local": True,
+        "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "openai": bool(os.environ.get("OPENAI_API_KEY")),
+        "anthropic_model": ANTHROPIC_MODEL,
+        "openai_model": OPENAI_MODEL,
+        "openai_base": OPENAI_BASE,
+    }
+
+
+# ------------------------------------------------------------------ transport
+
+def _post(url: str, payload: dict, headers: dict) -> dict:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        # urllib's default user-agent is blocked outright by some providers'
+        # bot protection (Groq's Cloudflare answers 1010 before reading the key).
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "AudioReader/0.1",
+            "Accept": "application/json",
+            **headers,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        raise RuntimeError(f"The explanation API returned {exc.code}: {detail}") from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Could not reach the explanation API: {exc.reason}") from None
+    except json.JSONDecodeError:
+        raise RuntimeError("The explanation API did not return JSON.") from None
+
+
+def _anthropic(system: str, user: str) -> str:
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "Explain mode with Claude needs ANTHROPIC_API_KEY. Set it, pick the "
+            "OpenAI-compatible engine, or use the offline outline."
+        )
+    data = _post(
+        ANTHROPIC_URL,
+        {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 2000,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        },
+        {"x-api-key": key, "anthropic-version": "2023-06-01"},
+    )
+    parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
+    text = "".join(parts).strip()
+    if not text:
+        raise RuntimeError("The explanation API returned an empty answer.")
+    return text
+
+
+def _openai(system: str, user: str) -> str:
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "Explain mode with an OpenAI-compatible API needs OPENAI_API_KEY "
+            "(and OPENAI_BASE_URL if you are not using OpenAI itself)."
+        )
+    data = _post(
+        f"{OPENAI_BASE}/chat/completions",
+        {
+            "model": OPENAI_MODEL,
+            "max_tokens": 2000,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        },
+        {"Authorization": f"Bearer {key}"},
+    )
+    try:
+        text = data["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, AttributeError):
+        raise RuntimeError(f"Unexpected reply from the explanation API: {str(data)[:200]}") from None
+    if not text:
+        raise RuntimeError("The explanation API returned an empty answer.")
+    return text
+
+
+# -------------------------------------------------------------------- entry
+
 def explain_section(section: Section, doc_title: str, target: int = 320,
-                    backend: str = "claude") -> str:
+                    backend: str = "local") -> str:
+    backend = ALIASES.get(backend, backend)
     if backend == "local":
         return _extractive(section, target)
-    return _claude(section, doc_title, target)
 
-
-def _claude(section: Section, doc_title: str, target: int) -> str:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise RuntimeError(
-            "Explain mode needs ANTHROPIC_API_KEY set, or pass --backend local "
-            "for the offline outline."
-        )
-    import anthropic
-
-    client = anthropic.Anthropic()
-    body = section.text[:120_000]
-    msg = client.messages.create(
-        model=MODEL,
-        max_tokens=2000,
-        system=SYSTEM.format(target=target),
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f"Document: {doc_title}\n"
-                    f"Section: {section.title}\n\n"
-                    f"---\n{body}\n---"
-                ),
-            }
-        ],
+    system = SYSTEM.format(target=target)
+    user = (
+        f"Document: {doc_title}\n"
+        f"Section: {section.title}\n\n"
+        f"---\n{section.text[:120_000]}\n---"
     )
-    return "".join(b.text for b in msg.content if b.type == "text").strip()
+    if backend == "anthropic":
+        return _anthropic(system, user)
+    if backend == "openai":
+        return _openai(system, user)
+    raise RuntimeError(f"Unknown explanation engine: {backend}")
+
+
+def explain_document(doc: Document, target: int = 320, backend: str = "local",
+                     on_progress=None) -> Document:
+    out = Document(title=doc.title, source=doc.source, kind=doc.kind, sections=[])
+    for i, sec in enumerate(doc.sections, 1):
+        out.sections.append(
+            Section(sec.title, explain_section(sec, doc.title, target, backend))
+        )
+        if on_progress:
+            on_progress(i, len(doc.sections))
+    return out
 
 
 # --------------------------------------------------- offline extractive digest
@@ -115,17 +227,3 @@ def _extractive(section: Section, target: int) -> str:
 
     lead = f"{section.title}. Here are the key points."
     return lead + " " + " ".join(s for _i, s in picked)
-
-
-def explain_document(doc: Document, target: int = 320, backend: str = "claude",
-                     on_progress=None) -> Document:
-    out = Document(
-        title=doc.title, source=doc.source, kind=doc.kind, sections=[]
-    )
-    for i, sec in enumerate(doc.sections, 1):
-        out.sections.append(
-            Section(sec.title, explain_section(sec, doc.title, target, backend))
-        )
-        if on_progress:
-            on_progress(i, len(doc.sections))
-    return out
