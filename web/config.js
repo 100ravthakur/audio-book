@@ -8,7 +8,7 @@
 //
 // You can also set it at runtime from the page itself — click "backend" under
 // the URL box — which stores it in this browser only.
-window.AUDIOREADER_API = "";
+window.AUDIOREADER_API = "https://audioreader.onrender.com";
 
 // Only if you set APP_TOKEN on the backend.
 window.AUDIOREADER_TOKEN = "";

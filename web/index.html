@@ -398,8 +398,9 @@ let doc = null, mode = 'read', jobId = null, tracks = [], cur = -1;
    Served by the backend  -> empty, same origin.
    Static on Vercel       -> config.js, or whatever the user saved here.      */
 const CFG = {
-  api: (localStorage.getItem('ar_api') ?? (window.AUDIOREADER_API || '')).replace(/\/+$/, ''),
-  token: localStorage.getItem('ar_token') ?? (window.AUDIOREADER_TOKEN || ''),
+  // A saved blank falls back to config.js, so clearing the box resets to the default.
+  api: (localStorage.getItem('ar_api') || window.AUDIOREADER_API || '').replace(/\/+$/, ''),
+  token: localStorage.getItem('ar_token') || window.AUDIOREADER_TOKEN || '',
 };
 const api = p => CFG.api + p;
 const hdr = (extra = {}) => CFG.token ? { ...extra, 'X-App-Token': CFG.token } : extra;
