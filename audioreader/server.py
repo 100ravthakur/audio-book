@@ -191,6 +191,23 @@ async def api_section(doc_id: str, n: int, x_app_token: str | None = Header(None
     return {"n": n, "title": sec.title, "words": sec.words, "text": sec.text[:200_000]}
 
 
+@app.post("/api/models")
+async def api_models(payload: dict, x_app_token: str | None = Header(None)) -> dict:
+    """What models the chosen provider offers, asked with the caller's key."""
+    check_token(x_app_token)
+    from .explain import list_models
+
+    try:
+        names = await asyncio.to_thread(
+            list_models,
+            (payload.get("base_url") or "").strip(),
+            (payload.get("api_key") or "").strip(),
+        )
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"models": names}
+
+
 @app.get("/api/search/{doc_id}")
 async def api_search(doc_id: str, q: str = "",
                      x_app_token: str | None = Header(None)) -> dict:

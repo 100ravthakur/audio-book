@@ -354,8 +354,15 @@
           <div class="hide" id="keyBox" style="margin-top:12px">
             <label for="aiKey">Your API key</label>
             <input id="aiKey" type="password" placeholder="sk-ant-…" autocomplete="off" />
-            <label for="aiModel" style="margin-top:9px">Model</label>
-            <input id="aiModel" type="text" placeholder="claude-opus-5-5" />
+            <div class="hide" id="provRow">
+              <label for="aiProv" style="margin-top:9px">Provider</label>
+              <select id="aiProv"></select>
+            </div>
+            <label for="aiModel" style="margin-top:9px">Model
+              <button class="link" id="aiFetch" style="margin-left:8px">list models</button>
+            </label>
+            <input id="aiModel" type="text" list="aiModels" placeholder="claude-opus-5-5" />
+            <datalist id="aiModels"></datalist>
             <div class="hide" id="baseRow">
               <label for="aiBase" style="margin-top:9px">API base URL</label>
               <input id="aiBase" type="text" placeholder="https://api.groq.com/openai/v1" />
@@ -581,9 +588,70 @@ function fillEngines() {
   sel.onchange = engineNote;
   engineNote();
 }
+/* Providers that speak the OpenAI protocol. Several have a free tier; model
+   names change often, so "list models" asks the provider instead of guessing. */
+const PROVIDERS = [
+  ['groq',       'Groq — free tier, no card',
+                 'https://api.groq.com/openai/v1', 'https://console.groq.com/keys'],
+  ['gemini',     'Google Gemini — free tier',
+                 'https://generativelanguage.googleapis.com/v1beta/openai',
+                 'https://aistudio.google.com/apikey'],
+  ['openrouter', 'OpenRouter — has free models',
+                 'https://openrouter.ai/api/v1', 'https://openrouter.ai/keys'],
+  ['cerebras',   'Cerebras — free tier',
+                 'https://api.cerebras.ai/v1', 'https://cloud.cerebras.ai'],
+  ['mistral',    'Mistral — free tier',
+                 'https://api.mistral.ai/v1', 'https://console.mistral.ai/api-keys'],
+  ['ollama',     'Ollama on this machine — no key at all',
+                 'http://localhost:11434/v1', 'https://ollama.com/download'],
+  ['openai',     'OpenAI — paid',
+                 'https://api.openai.com/v1', 'https://platform.openai.com/api-keys'],
+  ['custom',     'Something else…', '', ''],
+];
+
 const KEY_HELP = {
   anthropic: ['https://console.anthropic.com/settings/keys', 'claude-opus-5-5'],
-  openai: ['https://console.groq.com/keys', 'llama-3.3-70b-versatile'],
+  openai: ['https://console.groq.com/keys', ''],
+};
+
+(function fillProviders() {
+  const sel = $('aiProv');
+  sel.innerHTML = PROVIDERS.map(([id, label]) =>
+    `<option value="${id}">${label}</option>`).join('');
+  sel.value = localStorage.getItem('ar_ai_prov') || 'groq';
+  sel.onchange = () => {
+    const row = PROVIDERS.find(p => p[0] === sel.value);
+    localStorage.setItem('ar_ai_prov', sel.value);
+    if (row && row[2]) { $('aiBase').value = row[2]; AI.base = row[2]; }
+    if (row && row[3]) $('keyLink').href = row[3];
+    $('aiModels').innerHTML = '';
+    $('aiModel').value = '';
+  };
+})();
+
+$('aiFetch').onclick = async () => {
+  rememberKey();
+  const btn = $('aiFetch');
+  btn.textContent = 'asking…';
+  try {
+    const r = await jfetch('/api/models', {
+      method: 'POST',
+      headers: hdr({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ base_url: AI.base, api_key: AI.key }),
+    });
+    // Free models first, so the obvious pick costs nothing.
+    const free = r.models.filter(m => /:free$/.test(m));
+    const ordered = [...free, ...r.models.filter(m => !/:free$/.test(m))];
+    $('aiModels').innerHTML = ordered.map(m => `<option value="${esc(m)}">`).join('');
+    btn.textContent = free.length
+      ? `${r.models.length} models, ${free.length} free — pick one`
+      : `${r.models.length} models — pick one`;
+    if (!$('aiModel').value && ordered.length) $('aiModel').value = ordered[0];
+  } catch (e) {
+    btn.textContent = 'list models';
+    $('err2').textContent = e.message;
+    $('err2').classList.remove('hide');
+  }
 };
 
 function engineNote() {
@@ -598,6 +666,8 @@ function engineNote() {
   const needsKey = v !== 'local' && !ex[v];
   $('keyBox').classList.toggle('hide', !needsKey);
   $('baseRow').classList.toggle('hide', v !== 'openai');
+  $('provRow').classList.toggle('hide', v !== 'openai');
+  if (v === 'openai' && !$('aiBase').value) $('aiProv').onchange();
   if (needsKey) {
     const [link, model] = KEY_HELP[v] || ['#', ''];
     $('keyLink').href = link;

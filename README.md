@@ -126,6 +126,30 @@ say 60,000 words in and 10,000 words of explanation out:
 Opus is the default because it explains best; set `ANTHROPIC_MODEL`, or the
 Model box in the page, to trade down.
 
+### Free options
+
+Narration is already free and needs no key at all - the voices cost nothing,
+and the offline outline explains without any API. For a real explanation you
+need a model, and several providers have a free tier:
+
+| Provider | Free tier | Key from |
+|---|---|---|
+| **Groq** | yes, no card | <https://console.groq.com/keys> |
+| **Google Gemini** | yes | <https://aistudio.google.com/apikey> |
+| **OpenRouter** | models ending `:free` | <https://openrouter.ai/keys> |
+| **Cerebras** | yes | <https://cloud.cerebras.ai> |
+| **Mistral** | yes | <https://console.mistral.ai/api-keys> |
+| **Ollama** | entirely free, runs on your machine | <https://ollama.com/download> |
+
+Pick one from the **Provider** list in the page and the base URL fills itself
+in. Press **list models** and it asks that provider what it currently offers,
+putting any free ones first - model names change constantly, so the app asks
+rather than shipping a list that goes stale. Rate limits apply on free tiers;
+a provider answers 429 rather than charging you.
+
+Ollama is the only one with no account at all, but it only works for a local
+install - a backend on Render cannot reach your laptop.
+
 **Anything OpenAI-compatible** — set the base URL and model to match:
 
 | Provider | `OPENAI_BASE_URL` | typical `OPENAI_MODEL` |

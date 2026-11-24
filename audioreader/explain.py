@@ -100,6 +100,42 @@ def _check_base(url: str) -> None:
     assert_public_url(url)
 
 
+def list_models(base_url: str = "", api_key: str = "") -> list[str]:
+    """Ask an OpenAI-compatible provider what models it offers.
+
+    Model names go stale faster than anything else in this file, so let the
+    provider answer rather than hard-coding a list that rots.
+    """
+    base = (base_url or OPENAI_BASE).rstrip("/")
+    if base_url:
+        _check_base(base)
+    key = api_key or os.environ.get("OPENAI_API_KEY") or ""
+
+    req = urllib.request.Request(
+        f"{base}/models",
+        headers={"Authorization": f"Bearer {key}", "User-Agent": "AudioReader/0.1",
+                 "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:200]
+        raise RuntimeError(f"{base} returned {exc.code}: {detail}") from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Could not reach {base}: {exc.reason}") from None
+    except json.JSONDecodeError:
+        raise RuntimeError(f"{base} did not return JSON.") from None
+
+    rows = data.get("data") if isinstance(data, dict) else data
+    out = []
+    for m in rows or []:
+        name = m.get("id") or m.get("name") if isinstance(m, dict) else str(m)
+        if name:
+            out.append(name.split("/")[-1] if name.startswith("models/") else name)
+    return sorted(set(out))
+
+
 def _anthropic(system: str, user: str, creds: dict | None = None) -> str:
     creds = creds or {}
     key = creds.get("key") or os.environ.get("ANTHROPIC_API_KEY")
