@@ -100,12 +100,31 @@ provider SDK to install and switching provider is one environment variable.
 `/api/health` reports which engines the server can actually use, and the web
 app greys out the ones with no key.
 
-**Anthropic**
+**Easiest: paste a key into the page.** Switch to *An explanation*, choose
+Claude or an OpenAI-compatible engine, and a key field appears. The key is
+kept in that browser only and sent with each request to your own backend,
+which uses it for the call and never writes it down. Nothing to configure
+on the server.
+
+**Anthropic** - get a key at <https://console.anthropic.com/settings/keys>
+(sign in, Create Key, add a little credit). For the server-wide setting:
 
 ```powershell
 $env:ANTHROPIC_API_KEY = "sk-ant-..."
-$env:ANTHROPIC_MODEL = "claude-sonnet-5-5"   # optional
+$env:ANTHROPIC_MODEL = "claude-opus-5-5"   # optional, this is the default
 ```
+
+Rough cost for a whole book or prep kit, explained chapter by chapter -
+say 60,000 words in and 10,000 words of explanation out:
+
+| Model | Input $/M | Output $/M | That book |
+|---|---|---|---|
+| `claude-opus-5-5` | $4 | $20 | about $0.60 |
+| `claude-sonnet-5-5` | $2 | $10 | about $0.30 |
+| `claude-haiku-5-5` | $0.10 | $0.50 | about $0.02 |
+
+Opus is the default because it explains best; set `ANTHROPIC_MODEL`, or the
+Model box in the page, to trade down.
 
 **Anything OpenAI-compatible** — set the base URL and model to match:
 

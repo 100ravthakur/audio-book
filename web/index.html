@@ -297,6 +297,21 @@
               <input id="target" type="number" value="320" min="80" max="1200" step="20" /></div>
           </div>
           <p class="lede" id="engineNote" style="margin:8px 0 0"></p>
+          <div class="hide" id="keyBox" style="margin-top:12px">
+            <label for="aiKey">Your API key</label>
+            <input id="aiKey" type="password" placeholder="sk-ant-…" autocomplete="off" />
+            <label for="aiModel" style="margin-top:9px">Model</label>
+            <input id="aiModel" type="text" placeholder="claude-opus-5-5" />
+            <div class="hide" id="baseRow">
+              <label for="aiBase" style="margin-top:9px">API base URL</label>
+              <input id="aiBase" type="text" placeholder="https://api.groq.com/openai/v1" />
+            </div>
+            <p class="lede" style="margin:8px 0 0">
+              Kept in this browser only and sent with each request to your own
+              backend, which never stores it. <a id="keyLink" href="#" target="_blank"
+              rel="noopener">Where to get one ↗</a>
+            </p>
+          </div>
         </div>
         <div style="margin-top:16px">
           <button id="render" class="primary">Read it to me</button>
@@ -420,6 +435,12 @@ const CFG = {
   api: (localStorage.getItem('ar_api') || window.AUDIOREADER_API || '').replace(/\/+$/, ''),
   token: localStorage.getItem('ar_token') || window.AUDIOREADER_TOKEN || '',
 };
+// The reader's own API key for explain mode. Kept here, never on the server.
+const AI = {
+  key: localStorage.getItem('ar_ai_key') || '',
+  model: localStorage.getItem('ar_ai_model') || '',
+  base: localStorage.getItem('ar_ai_base') || '',
+};
 const api = p => CFG.api + p;
 const hdr = (extra = {}) => CFG.token ? { ...extra, 'X-App-Token': CFG.token } : extra;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
@@ -485,21 +506,50 @@ function fillEngines() {
   for (const [v, label, ok] of opts) {
     const o = document.createElement('option');
     o.value = v;
-    o.textContent = ok ? label : `${label} (no key on the server)`;
-    o.disabled = !ok;
+    // Still selectable without a server key — the reader can supply their own.
+    o.textContent = ok ? label : `${label} (bring your own key)`;
+    o.disabled = !ok && !ex.byok;
     sel.appendChild(o);
   }
   sel.value = ex.anthropic ? 'anthropic' : (ex.openai ? 'openai' : 'local');
   sel.onchange = engineNote;
   engineNote();
 }
+const KEY_HELP = {
+  anthropic: ['https://console.anthropic.com/settings/keys', 'claude-opus-5-5'],
+  openai: ['https://console.groq.com/keys', 'llama-3.3-70b-versatile'],
+};
+
 function engineNote() {
   const ex = (health && health.explain) || {};
   const v = $('backend').value;
   $('engineNote').textContent =
     v === 'local' ? 'Picks out the key sentences. Instant, free, fairly blunt.'
-    : v === 'anthropic' ? 'Writes a real explanation for each chapter.'
-    : `Sends chapters to ${ex.openai_base || 'the configured API'}.`;
+    : v === 'anthropic' ? 'Claude writes a real explanation of each chapter.'
+    : `Sends each chapter to ${ex.openai_base || 'the configured API'}.`;
+
+  // Offer the key field whenever the server has no key of its own for this engine.
+  const needsKey = v !== 'local' && !ex[v];
+  $('keyBox').classList.toggle('hide', !needsKey);
+  $('baseRow').classList.toggle('hide', v !== 'openai');
+  if (needsKey) {
+    const [link, model] = KEY_HELP[v] || ['#', ''];
+    $('keyLink').href = link;
+    $('aiKey').value = AI.key;
+    $('aiKey').placeholder = v === 'anthropic' ? 'sk-ant-…' : 'gsk_… or sk-…';
+    $('aiModel').value = AI.model || model;
+    $('aiModel').placeholder = model;
+    $('aiBase').value = AI.base;
+  }
+}
+
+function rememberKey() {
+  AI.key = $('aiKey').value.trim();
+  AI.model = $('aiModel').value.trim();
+  AI.base = $('aiBase').value.trim();
+  localStorage.setItem('ar_ai_key', AI.key);
+  localStorage.setItem('ar_ai_model', AI.model);
+  localStorage.setItem('ar_ai_base', AI.base);
 }
 
 async function loadVoices() {
@@ -695,6 +745,13 @@ $('target').oninput = estimate;
 /* ---------------- generate ---------------- */
 $('render').onclick = async () => {
   $('err2').classList.add('hide');
+  rememberKey();
+  if (mode === 'explain' && $('backend').value !== 'local'
+      && !AI.key && !(health.explain || {})[$('backend').value]) {
+    $('err2').textContent = 'That engine needs an API key. Paste one above, or switch to the offline outline.';
+    $('err2').classList.remove('hide');
+    return;
+  }
   $('render').disabled = true;
   $('render').innerHTML = '<span class="spin">◠</span> Working…';
   try {
@@ -705,6 +762,8 @@ $('render').onclick = async () => {
         doc_id: doc.doc_id, sections: picked(), mode,
         voice: $('voice').value, rate: $('rate').value,
         backend: $('backend').value, target: +$('target').value,
+        // only when the reader supplied one; the server has none to fall back on
+        api_key: AI.key, model: AI.model, base_url: AI.base,
       }),
     });
     jobId = data.job_id; tracks = []; cur = -1;
