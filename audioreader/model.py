@@ -77,7 +77,9 @@ def clean(raw: str) -> str:
                 continue
             cells = [c.strip() for c in s.strip("|").split("|") if c.strip()]
             joined = " ".join(cells)
-            if len(joined.split()) < 8:
+            # Prose runs long or ends in a full stop; a navigation cell
+            # ("Part of a series of articles on the") does neither.
+            if len(joined.split()) < 14 and not joined.rstrip().endswith((".", "!", "?")):
                 continue
             s = joined
         out_lines.append(s)

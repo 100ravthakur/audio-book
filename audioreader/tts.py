@@ -78,6 +78,65 @@ async def _synth_chunk(text: str, voice: str, rate: str, pitch: str, volume: str
     return bytes(audio)
 
 
+# --------------------------------------------------------- mp3 frame duration
+#
+# Word cues are timed from their own chunk's start, so to lay chunks end to end
+# we need each one's exact length. Counting MPEG frames is exact; adding up the
+# word timings instead would drift over a long chapter.
+
+_BITRATES_V2_L3 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0]
+_BITRATES_V1_L3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0]
+_RATES = {0: [44100, 48000, 32000], 2: [22050, 24000, 16000], 3: [11025, 12000, 8000]}
+
+
+def mp3_duration(data: bytes) -> float:
+    """Length in seconds, by walking the MPEG frame headers."""
+    i, total, n = 0, 0.0, len(data)
+    if data[:3] == b"ID3":                       # skip a leading ID3v2 tag
+        sz = int.from_bytes(data[6:10], "big")
+        i = 10 + ((sz & 0x7F) | ((sz >> 1) & 0x3F80)
+                  | ((sz >> 2) & 0x1FC000) | ((sz >> 3) & 0xFE00000))
+    while i + 4 <= n:
+        if data[i] != 0xFF or (data[i + 1] & 0xE0) != 0xE0:
+            i += 1
+            continue
+        ver = (data[i + 1] >> 3) & 0x03          # 0=MPEG2.5, 2=MPEG2, 3=MPEG1
+        layer = (data[i + 1] >> 1) & 0x03        # 1 = Layer III
+        bri = (data[i + 2] >> 4) & 0x0F
+        sri = (data[i + 2] >> 2) & 0x03
+        pad = (data[i + 2] >> 1) & 0x01
+        if layer != 1 or ver == 1 or bri in (0, 15) or sri == 3:
+            i += 1
+            continue
+        rate = _RATES[0 if ver == 3 else (2 if ver == 2 else 3)][sri]
+        kbps = (_BITRATES_V1_L3 if ver == 3 else _BITRATES_V2_L3)[bri]
+        if not rate or not kbps:
+            i += 1
+            continue
+        samples = 1152 if ver == 3 else 576
+        total += samples / rate
+        i += max((samples // 8) * kbps * 1000 // rate + pad, 4)
+    return total
+
+
+async def _synth_cued(text: str, voice: str, rate: str, pitch: str,
+                      volume: str) -> tuple[bytes, list]:
+    """Same as _synth_chunk, but also collects per-word timings."""
+    import edge_tts
+
+    comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch,
+                                volume=volume, boundary="WordBoundary")
+    audio, cues = bytearray(), []
+    async for part in comm.stream():
+        if part["type"] == "audio":
+            audio.extend(part["data"])
+        elif part["type"] == "WordBoundary":
+            cues.append([round(part["offset"] / 1e7, 3),      # 100ns ticks
+                         round(part["duration"] / 1e7, 3),
+                         part["text"]])
+    return bytes(audio), cues
+
+
 async def speak_async(
     text: str,
     out_path: Path,
@@ -87,14 +146,22 @@ async def speak_async(
     volume: str = "+0%",
     on_progress: Callable[[int, int], None] | None = None,
     retries: int = 3,
+    cue_path: Path | None = None,
 ) -> Path:
-    """Synthesize `text` to an MP3 at `out_path`."""
+    """Synthesize `text` to an MP3 at `out_path`.
+
+    With `cue_path`, also writes {"text": ..., "cues": [[start, length, word]]}
+    — the exact words spoken and when each one is said, which is what lets the
+    reader follow along and lets you click a word to jump there.
+    """
     chunks = split_for_tts(text)
     if not chunks:
         raise ValueError("Nothing to speak.")
 
     voice_id = resolve_voice(voice)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    cues: list = []
+    elapsed = 0.0
 
     # MP3 frames concatenate cleanly, so no ffmpeg needed.
     with out_path.open("wb") as fh:
@@ -102,7 +169,16 @@ async def speak_async(
             last_err: Exception | None = None
             for attempt in range(retries):
                 try:
-                    fh.write(await _synth_chunk(chunk, voice_id, rate, pitch, volume))
+                    if cue_path:
+                        audio, part_cues = await _synth_cued(
+                            chunk, voice_id, rate, pitch, volume)
+                        for start, length, word in part_cues:
+                            cues.append([round(elapsed + start, 3), length, word])
+                        elapsed += mp3_duration(audio)
+                    else:
+                        audio = await _synth_chunk(
+                            chunk, voice_id, rate, pitch, volume)
+                    fh.write(audio)
                     last_err = None
                     break
                 except Exception as exc:  # transient network / service hiccup
@@ -114,6 +190,14 @@ async def speak_async(
                 ) from last_err
             if on_progress:
                 on_progress(i, len(chunks))
+
+    if cue_path:
+        import json
+
+        cue_path.write_text(
+            json.dumps({"text": " ".join(chunks), "cues": cues}, ensure_ascii=False),
+            encoding="utf-8",
+        )
     return out_path
 
 

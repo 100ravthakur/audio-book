@@ -117,7 +117,8 @@ def _render(doc: Document, args, label: str) -> int:
                 written.append(target)
                 continue
             speak(f"{sec.title}.\n\n{sec.text}", target, voice=voice,
-                  rate=args.rate, pitch=args.pitch)
+                  rate=args.rate, pitch=args.pitch,
+                  cue_path=target.with_suffix(".json"))
             print(f" {target.stat().st_size / 1024 / 1024:>5.1f} MB")
             written.append(target)
 

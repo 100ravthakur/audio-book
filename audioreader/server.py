@@ -191,6 +191,41 @@ async def api_section(doc_id: str, n: int, x_app_token: str | None = Header(None
     return {"n": n, "title": sec.title, "words": sec.words, "text": sec.text[:200_000]}
 
 
+@app.get("/api/search/{doc_id}")
+async def api_search(doc_id: str, q: str = "",
+                     x_app_token: str | None = Header(None)) -> dict:
+    """Find a phrase across the whole document, with a little context."""
+    import re as _re
+
+    check_token(x_app_token)
+    doc = DOCS.get(doc_id)
+    if not doc:
+        raise HTTPException(404, "That document is no longer loaded. Analyze again.")
+    q = q.strip()
+    if len(q) < 2:
+        return {"q": q, "hits": [], "total": 0}
+
+    pat = _re.compile(_re.escape(q), _re.I)
+    hits, total = [], 0
+    for i, sec in enumerate(doc.sections, 1):
+        found = list(pat.finditer(sec.text))
+        if not found:
+            continue
+        total += len(found)
+        snippets = []
+        for m in found[:4]:
+            a, b = max(0, m.start() - 60), min(len(sec.text), m.end() + 80)
+            snippets.append({
+                "before": ("…" if a else "") + sec.text[a:m.start()].replace("\n", " "),
+                "match": sec.text[m.start():m.end()],
+                "after": sec.text[m.end():b].replace("\n", " ") + ("…" if b < len(sec.text) else ""),
+                "at": m.start(),
+            })
+        hits.append({"n": i, "title": sec.title, "count": len(found),
+                     "snippets": snippets})
+    return {"q": q, "hits": hits, "total": total}
+
+
 @app.post("/api/render")
 async def api_render(payload: dict, x_app_token: str | None = Header(None)) -> dict:
     check_token(x_app_token)
@@ -253,7 +288,8 @@ async def _run_job(job, doc, picked, out_dir, mode, backend, voice, rate, target
                     explain_section, sec, doc.title, target, backend, creds
                 )
             path = out_dir / f"{n:03d}.mp3"
-            await speak_async(f"{sec.title}.\n\n{text}", path, voice=voice, rate=rate)
+            await speak_async(f"{sec.title}.\n\n{text}", path, voice=voice, rate=rate,
+                              cue_path=out_dir / f"{n:03d}.json")
             (out_dir / f"{n:03d}.txt").write_text(text, encoding="utf-8")
             job.tracks.append(
                 {
@@ -261,6 +297,7 @@ async def _run_job(job, doc, picked, out_dir, mode, backend, voice, rate, target
                     "title": sec.title,
                     "url": f"/api/audio/{job.id}/{n:03d}",
                     "text_url": f"/api/text/{job.id}/{n:03d}",
+                    "cues_url": f"/api/cues/{job.id}/{n:03d}",
                     "size_mb": round(path.stat().st_size / 1024 / 1024, 2),
                 }
             )
@@ -309,6 +346,12 @@ async def api_audio(job_id: str, name: str) -> FileResponse:
 @app.get("/api/text/{job_id}/{name}")
 async def api_text(job_id: str, name: str) -> FileResponse:
     return FileResponse(_safe_file(job_id, name, ".txt"), media_type="text/plain")
+
+
+@app.get("/api/cues/{job_id}/{name}")
+async def api_cues(job_id: str, name: str) -> FileResponse:
+    """Word timings: what was said, and exactly when."""
+    return FileResponse(_safe_file(job_id, name, ".json"), media_type="application/json")
 
 
 @app.post("/api/cleanup")

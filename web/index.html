@@ -158,6 +158,53 @@
     font-size:12px; color:var(--muted); max-width:300px;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
+  .qbox {
+    width:190px; padding:5px 10px; font-size:12.5px; border-radius:6px;
+    border:1px solid var(--rule); background:rgba(0,0,0,.2); color:var(--ink);
+  }
+  .qbox:focus { outline:none; border-color:var(--accent); width:250px; }
+
+  /* read-along */
+  #followWrap, #searchWrap { height:min(62vh, 620px); overflow-y:auto; padding:26px 32px; }
+  #followBody {
+    font-family:"Iowan Old Style",Georgia,serif; font-size:17.5px; line-height:2.05;
+    max-width:60ch; color:var(--muted);
+  }
+  #followBody .w { cursor:pointer; border-radius:3px; padding:1px 1px; transition:color .12s; }
+  #followBody .w:hover { color:var(--amber); text-decoration:underline; text-underline-offset:4px; }
+  #followBody .w.said { color:var(--ink2); }
+  #followBody .w.now {
+    color:#fff; background:var(--thread); padding:1px 4px; margin:0 -3px;
+    border-radius:4px;
+  }
+  /* search */
+  .hit { border-bottom:1px solid var(--rule2); padding:12px 0; cursor:pointer; }
+  .hit:last-child { border-bottom:0; }
+  .hit:hover .hit-t { color:var(--amber); }
+  .hit-t { font-size:13px; color:var(--muted); margin-bottom:5px; }
+  .hit-s {
+    font-family:"Iowan Old Style",Georgia,serif; font-size:15px;
+    line-height:1.7; color:var(--ink2); margin-bottom:5px;
+  }
+  .hit-s mark { background:rgba(216,65,60,.35); color:#fff; border-radius:3px; padding:0 2px; }
+
+  /* resume + library */
+  .resume {
+    border:1px solid var(--accent); background:var(--accent-soft);
+    border-radius:8px; padding:11px 13px; margin-bottom:14px; font-size:13.5px;
+  }
+  .resume b { color:var(--amber); }
+  .lib { display:flex; align-items:baseline; gap:9px; padding:8px 11px;
+         border-bottom:1px solid var(--rule2); cursor:pointer; font-size:13.5px; }
+  .lib:last-child { border-bottom:0; }
+  .lib:hover { background:rgba(255,255,255,.05); }
+  .lib .t { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lib .w { color:var(--muted); font-size:12px; }
+  kbd {
+    font:inherit; font-size:11px; border:1px solid var(--rule); border-radius:4px;
+    padding:1px 5px; color:var(--muted); background:rgba(0,0,0,.2);
+  }
+
   #frameWrap, #textWrap { height:min(62vh, 620px); }
   #frame { width:100%; height:100%; border:0; background:var(--card); display:block; }
   #textWrap { overflow-y:auto; padding:26px 32px; }
@@ -255,8 +302,15 @@
         </div>
       </section>
 
+      <section class="panel hide" id="libPanel">
+        <h2>Carry on</h2>
+        <p class="lede">Where you stopped, kept in this browser.</p>
+        <div class="list" id="libList"></div>
+      </section>
+
       <section class="panel hide" id="docPanel">
         <h2><span class="num">2</span>Chapters</h2>
+        <div class="resume hide" id="resumeBox"></div>
         <p class="lede" id="docMeta"></p>
         <div style="display:flex; gap:8px; margin-bottom:10px">
           <button class="link" id="selAll">all</button>
@@ -326,6 +380,8 @@
         <div class="panebar">
           <button class="tab on" id="tabPage">Page</button>
           <button class="tab" id="tabText">Text</button>
+          <button class="tab" id="tabFollow">Read along</button>
+          <input id="q" class="qbox" type="search" placeholder="Search this document  /" />
           <span class="grow"></span>
           <span class="src" id="srcLabel"></span>
           <a id="openOrig" class="hide" target="_blank" rel="noopener"
@@ -340,6 +396,15 @@
         </div>
         <div id="textWrap" class="hide">
           <div id="textBody"></div>
+        </div>
+        <div id="followWrap" class="hide">
+          <div id="followBody" class="empty">
+            Start playing a chapter and the words light up here as they are read.
+            Click any word to jump the audio to it.
+          </div>
+        </div>
+        <div id="searchWrap" class="hide">
+          <div id="searchBody" class="empty">Type in the search box above.</div>
         </div>
       </div>
 
@@ -491,6 +556,7 @@ async function jfetch(path, opts = {}) {
     : ' — <span class="ok">connected</span>';
   fillEngines();
   setMode('read');
+  drawLibrary();
   await loadVoices();
 })();
 
@@ -572,15 +638,18 @@ async function loadVoices() {
 }
 
 /* ---------------- the reading pane ---------------- */
+const PANES = { page:'frameWrap', text:'textWrap', follow:'followWrap', search:'searchWrap' };
+const TABS  = { page:'tabPage',   text:'tabText',   follow:'tabFollow' };
+let tab = 'page';
+
 function showTab(which) {
-  const page = which === 'page';
-  $('tabPage').classList.toggle('on', page);
-  $('tabText').classList.toggle('on', !page);
-  $('frameWrap').classList.toggle('hide', !page);
-  $('textWrap').classList.toggle('hide', page);
+  tab = which;
+  for (const [k, id] of Object.entries(PANES)) $(id).classList.toggle('hide', k !== which);
+  for (const [k, id] of Object.entries(TABS)) $(id).classList.toggle('on', k === which);
 }
 $('tabPage').onclick = () => showTab('page');
 $('tabText').onclick = () => showTab('text');
+$('tabFollow').onclick = () => showTab('follow');
 
 let frameTimer = null;
 
@@ -710,6 +779,8 @@ function renderDoc() {
   now(`<strong>${esc(doc.title)}</strong>`,
       `${doc.sections.length} parts · ${doc.words.toLocaleString()} words`);
   if (doc.sections.length) showSectionText(1, false);  // load it, but stay on Page
+  $('libPanel').classList.add('hide');
+  offerResume();
 }
 const picked = () => [...$('secs').querySelectorAll('.cb:checked')].map(c => +c.value);
 $('selAll').onclick = () => { $('secs').querySelectorAll('.cb').forEach(c => c.checked = true); estimate(); };
@@ -820,15 +891,216 @@ function play(i) {
   cur = i;
   $('player').crossOrigin = CFG.api ? 'anonymous' : null;
   $('player').src = api(tracks[i].url);
+
+  // Picking up where you left off: seek once, on the part you stopped in.
+  if (pendingResume && tracks[i].n === pendingResume.n) {
+    const at = pendingResume.t;
+    pendingResume = null;
+    $('player').addEventListener('loadedmetadata', function once() {
+      $('player').removeEventListener('loadedmetadata', once);
+      $('player').currentTime = Math.min(at, ($('player').duration || at) - 1);
+    });
+  }
   $('player').play().catch(() => {});
   now(`Reading <strong>${esc(tracks[i].title)}</strong>`, `part ${i + 1} of ${tracks.length}`);
   drawTracks();
+  loadCues(tracks[i]);
   if (doc) showSectionText(tracks[i].n, false);
 }
 $('player').onended = () => {
   if (cur + 1 < tracks.length) play(cur + 1);
   else now('Finished.', 'Open something else whenever you like.');
 };
+
+/* ================= read along =================
+   The voice service reports when it says each word. We keep those cues, lay
+   them end to end using each audio chunk's true length, and light the word up
+   as it is spoken. The same table runs backwards: click a word, seek to it. */
+let cue = null;        // {text, cues:[[start, length, word]]}
+let cueWords = [];     // the <span> for each cue, by index
+let cueAt = -1;        // which cue is lit right now
+
+async function loadCues(track) {
+  cue = null; cueWords = []; cueAt = -1;
+  if (!track.cues_url) return;
+  try {
+    cue = await jfetch(track.cues_url, { headers: hdr() });
+  } catch { return; }
+  renderFollow();
+}
+
+function renderFollow() {
+  const text = cue.text, parts = [];
+  let at = 0;
+  cue.cues.forEach(([, , word], i) => {
+    const idx = text.indexOf(word, at);
+    if (idx < 0) return;                       // word not found verbatim; skip
+    if (idx > at) parts.push(esc(text.slice(at, idx)));   // spaces, punctuation
+    parts.push(`<span class="w" data-i="${i}">${esc(word)}</span>`);
+    at = idx + word.length;
+  });
+  parts.push(esc(text.slice(at)));
+  const body = $('followBody');
+  body.classList.remove('empty');
+  body.innerHTML = parts.join('');
+  cueWords = [...body.querySelectorAll('.w')];
+  body.onclick = e => {
+    const el = e.target.closest('.w');
+    if (!el) return;
+    $('player').currentTime = cue.cues[+el.dataset.i][0] + 0.01;
+    $('player').play().catch(() => {});
+  };
+}
+
+function cueIndexAt(t) {                        // binary search, runs every frame
+  const c = cue.cues;
+  let lo = 0, hi = c.length - 1, best = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (c[mid][0] <= t) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+  }
+  return best;
+}
+
+function paintFollow(t) {
+  if (!cue || !cueWords.length) return;
+  const i = cueIndexAt(t);
+  if (i === cueAt) return;
+  if (cueAt >= 0 && cueWords[cueAt]) {
+    cueWords[cueAt].classList.remove('now');
+    cueWords[cueAt].classList.add('said');
+  }
+  cueAt = i;
+  const el = cueWords[i];
+  if (!el) return;
+  el.classList.add('now');
+  if (tab === 'follow') {
+    const box = $('followWrap').getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    if (r.top < box.top + 60 || r.bottom > box.bottom - 60) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+}
+
+/* ================= search ================= */
+let qTimer = null;
+$('q').addEventListener('input', () => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(runSearch, 250);
+});
+$('q').addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+
+async function runSearch() {
+  const q = $('q').value.trim();
+  if (!doc) return;
+  if (q.length < 2) { showTab(tab === 'search' ? 'text' : tab); return; }
+  showTab('search');
+  $('searchBody').classList.remove('empty');
+  $('searchBody').innerHTML = '<span style="color:var(--muted)">Searching…</span>';
+  let r;
+  try { r = await jfetch(`/api/search/${doc.doc_id}?q=${encodeURIComponent(q)}`, { headers: hdr() }); }
+  catch (e) { $('searchBody').innerHTML = `<span style="color:var(--warn)">${esc(e.message)}</span>`; return; }
+
+  if (!r.total) {
+    $('searchBody').innerHTML =
+      `<span style="color:var(--muted)">Nothing for “${esc(q)}”.</span>`;
+    return;
+  }
+  $('searchBody').innerHTML =
+    `<div class="hit-t" style="margin-bottom:10px">${r.total} ` +
+    `${r.total === 1 ? 'match' : 'matches'} in ${r.hits.length} ` +
+    `${r.hits.length === 1 ? 'chapter' : 'chapters'}</div>` +
+    r.hits.map(h => h.snippets.map(s => `
+      <div class="hit" data-n="${h.n}">
+        <div class="hit-t">${h.n} · ${esc(h.title)}</div>
+        <div class="hit-s">${esc(s.before)}<mark>${esc(s.match)}</mark>${esc(s.after)}</div>
+      </div>`).join('')).join('');
+  $('searchBody').querySelectorAll('.hit').forEach(el =>
+    el.onclick = () => showSectionText(+el.dataset.n));
+}
+
+/* ================= library & resume =================
+   Where you stopped, per source, kept in this browser. */
+const LIB = 'ar_library';
+const libAll = () => { try { return JSON.parse(localStorage.getItem(LIB) || '{}'); }
+                       catch { return {}; } };
+let pendingResume = null, lastSaved = 0;
+
+function libSave() {
+  if (!doc || cur < 0 || !tracks[cur]) return;
+  const t = $('player').currentTime || 0;
+  if (Date.now() - lastSaved < 4000) return;
+  lastSaved = Date.now();
+  const all = libAll();
+  all[doc.source || doc.title] = {
+    title: doc.title, kind: doc.kind, source: doc.source,
+    n: tracks[cur].n, t: Math.floor(t), parts: doc.sections.length, at: Date.now(),
+  };
+  const keys = Object.keys(all).sort((a, b) => all[b].at - all[a].at).slice(0, 12);
+  localStorage.setItem(LIB, JSON.stringify(
+    Object.fromEntries(keys.map(k => [k, all[k]]))));
+}
+$('player').addEventListener('timeupdate', libSave);
+$('player').addEventListener('pause', () => { lastSaved = 0; libSave(); });
+
+const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+function offerResume() {
+  const rec = libAll()[doc.source || doc.title];
+  const box = $('resumeBox');
+  if (!rec || (rec.n === 1 && rec.t < 20)) { box.classList.add('hide'); return; }
+  box.classList.remove('hide');
+  box.innerHTML = `You stopped in <b>part ${rec.n}</b> at ${clock(rec.t)}. ` +
+    `<button id="resumeGo" style="margin-left:6px;padding:4px 11px">Carry on</button>`;
+  $('resumeGo').onclick = () => {
+    $('secs').querySelectorAll('.cb').forEach(c => c.checked = +c.value >= rec.n);
+    estimate();
+    pendingResume = rec;
+    box.classList.add('hide');
+    $('render').click();
+  };
+}
+
+function drawLibrary() {
+  const all = libAll();
+  const keys = Object.keys(all).sort((a, b) => all[b].at - all[a].at);
+  if (!keys.length) { $('libPanel').classList.add('hide'); return; }
+  $('libPanel').classList.remove('hide');
+  $('libList').innerHTML = keys.map(k => {
+    const r = all[k];
+    const web = /^https?:/.test(r.source || '');
+    return `<div class="lib" data-src="${esc(web ? r.source : '')}">
+      <span class="t">${esc(r.title)}</span>
+      <span class="w">part ${r.n}/${r.parts} · ${clock(r.t)}</span>
+    </div>`;
+  }).join('');
+  $('libList').querySelectorAll('.lib').forEach(el => el.onclick = () => {
+    if (!el.dataset.src) {
+      $('err1').textContent = 'That one was a file from your computer — open it again below.';
+      $('err1').classList.remove('hide');
+      return;
+    }
+    $('url').value = el.dataset.src;
+    $('go').click();
+  });
+}
+
+/* ================= keyboard ================= */
+document.addEventListener('keydown', e => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+  if (e.key === '/' && !typing) { e.preventDefault(); $('q').focus(); return; }
+  if (typing) return;
+  const p = $('player');
+  if (e.key === ' ') { e.preventDefault(); p.paused ? p.play().catch(() => {}) : p.pause(); }
+  else if (e.key === 'ArrowRight') { p.currentTime += 10; }
+  else if (e.key === 'ArrowLeft') { p.currentTime -= 10; }
+  else if (e.key === 'n') { play(cur + 1); }
+  else if (e.key === 'p') { play(cur - 1); }
+  else if (e.key === 'f') { showTab('follow'); }
+  else if (e.key === '+' || e.key === '=') { p.playbackRate = Math.min(3, p.playbackRate + 0.1); }
+  else if (e.key === '-') { p.playbackRate = Math.max(0.5, p.playbackRate - 0.1); }
+});
 
 /* ---------------- live mouth + meter ---------------- */
 const BARS = 26;
@@ -860,6 +1132,7 @@ function tick() {
     bars.forEach(b => b.style.height = '2px');
     return;
   }
+  paintFollow($('player').currentTime);
   analyser.getByteFrequencyData(freq);
   let sum = 0;
   for (let i = 2; i < 20; i++) sum += freq[i];
